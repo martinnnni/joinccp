@@ -2,6 +2,8 @@
 
 **线上网站：**[joinccp.martinzhang.asia](https://joinccp.martinzhang.asia/) · [成长导师](https://joinccp.martinzhang.asia/#mentor)
 
+**协作发布：**朋友从分支提出 Pull Request，GitHub 自动运行测试并请求仓库所有者审阅。所有者在 GitHub 批准后，把 PR 链接交给 Codex；Codex 核对批准记录与测试结果，再合并并部署到上述网站。操作细节见 [CONTRIBUTING.md](CONTRIBUTING.md)。Cloudflare 部署凭据仅保留在所有者本机，不写入 GitHub。
+
 此目录将原 Django 项目改写为 Cloudflare Worker。原业务源码保存在 legacy/，未复制压缩包中的密钥文件、本机虚拟环境、工具源码和日志。
 
 页眉使用[中国民航大学官网](https://www.cauc.edu.cn/zhv5/)的校徽与校名题字图片（`public/cauc-wordmark.png`）；项目名称沿用原项目的“党员发展计划辅助系统”。当前界面借鉴 martinzhang.asia 博客的大字号排版、细网格与轨道图形，保持白底。拉丁字形使用开源的 [Space Grotesk](https://github.com/floriankarsten/space-grotesk) 与 [DM Mono](https://github.com/googlefonts/dm-mono)，授权文本位于 `public/fonts/`。
