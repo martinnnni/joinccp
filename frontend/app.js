@@ -434,15 +434,42 @@ function checksPage() {
   const shell = make("div", { className: "view view-checks" }, pageHead("STAFF / DOCUMENTS", "已提交文件", "按权限查看并下载学生提交的材料。"), notice("正在读取记录…"));
   (async () => { try {
     const data = await api("/api/checks");
+    const selected = new Set();
+    const count = make("span", { className: "bulk-count", text: "已选 0 份" });
+    const checks = data.checks.filter(x => x.review_status === "待审阅");
     const table = make("table", { className: "data" },
-      make("thead", {}, make("tr", {}, ["学生", "材料", "文件", "检查时间"].map(x => make("th", { text: x })))),
+      make("thead", {}, make("tr", {},
+        make("th", { className: "bulk-select" }, make("input", { type: "checkbox", "aria-label": "选择全部待审阅材料", onchange: event => {
+          table.querySelectorAll("tbody input[type=checkbox]").forEach(box => { box.checked = event.target.checked; box.dispatchEvent(new Event("change")); });
+        } })),
+        ["学生", "材料", "文件", "审阅状态", "检查时间"].map(x => make("th", { text: x })))),
       make("tbody", {}, data.checks.map(x => make("tr", {},
+        make("td", { className: "bulk-select" }, x.review_status === "待审阅" ? make("input", { type: "checkbox", value: x.id, "aria-label": "选择 " + (x.student_name || x.student_id) + " 的 " + x.material_name, onchange: event => {
+          if (event.target.checked) selected.add(x.id); else selected.delete(x.id);
+          count.textContent = "已选 " + selected.size + " 份";
+        } }) : null),
         make("td", { text: x.student_name || String(x.student_id) }),
         make("td", { text: x.material_name }),
         make("td", {}, make("a", { href: "/api/checks/" + x.id + "/file", text: x.filename })),
+        make("td", {}, make("span", { className: "review-pill " + (x.review_status === "已通过" ? "approved" : x.review_status === "退回修改" ? "returned" : ""), text: x.review_status || "待审阅", title: x.review_note || "" })),
         make("td", { text: x.checked_at })))));
+    const note = field("退回修改说明", "reviewNote", "text", false);
+    const review = async status => {
+      if (!selected.size) return feedback(tools, "请先选择待审阅材料");
+      if (status === "退回修改" && !note.querySelector("input").value.trim()) return feedback(tools, "请填写退回修改说明");
+      if (!confirm("确认将 " + selected.size + " 份材料标记为「" + status + "」？")) return;
+      try {
+        const result = await post("/api/admin/checks/bulk-review", { checkIds: [...selected], status, note: note.querySelector("input").value });
+        alert("已审阅 " + result.count + " 份材料，学生将收到站内通知。");
+        render();
+      } catch (error) { feedback(tools, error.message); }
+    };
+    const tools = make("div", { className: "bulk-tools" }, count,
+      button("批量通过", () => review("已通过")), note,
+      button("批量退回", () => review("退回修改"), "secondary"));
     shell.replaceChildren(pageHead("STAFF / DOCUMENTS", "已提交文件", "按权限查看并下载学生提交的材料。"),
-      panel(make("div", { className: "panel-head" }, make("h2", { text: "学生提交记录" }), make("span", { className: "small", text: "共 " + data.checks.length + " 条" })),
+      panel(make("div", { className: "panel-head" }, make("h2", { text: "学生提交记录" }), make("span", { className: "small", text: "待审阅 " + checks.length + " / 共 " + data.checks.length + " 条" })),
+        data.checks.length ? tools : null,
         data.checks.length ? tableWrap(table) : make("div", { className: "empty-state" }, make("strong", { text: "暂无质检记录" }), "学生上传材料后会在这里显示。")));
   } catch (error) { shell.replaceChildren(pageHead("STAFF / DOCUMENTS", "已提交文件"), notice(error.message, "error")); } })();
   return shell;
@@ -506,8 +533,11 @@ function adminPage() {
     const inviteForm = make("form", { className: "inline-form" },
       needsDepartment ? field("新院系名称", "departmentName") : select("院系", "departmentId", departmentChoices, me.department_id || departmentChoices[0]?.[0]),
       select("角色", "role", me.role === "admin" ? [["student", "学生"], ["counselor", "辅导员"]] : [["student", "学生"]]),
+      field("邀请数量（1–50）", "count", "number", true, "1"),
       make("button", { className: "btn", type: "submit", text: needsDepartment ? "创建院系并生成邀请码" : "生成邀请码" }));
-    const inviteOutput = make("p", { className: "muted invite-output", text: needsDepartment ? "尚未设置院系。输入真实院系名称后，即可生成第一个邀请码。" : "邀请码仅显示一次，有效期 7 天。" });
+    const countInput = inviteForm.querySelector("[name=count]");
+    countInput.min = "1"; countInput.max = "50";
+    const inviteOutput = make("div", { className: "muted invite-output", text: needsDepartment ? "尚未设置院系。输入真实院系名称后，即可生成第一个邀请码。" : "邀请码仅显示一次，有效期 7 天。" });
     inviteForm.addEventListener("submit", async event => {
       event.preventDefault();
       const release = busy(inviteForm);
@@ -522,7 +552,9 @@ function adminPage() {
           needsDepartment = false;
         }
         const result = await post("/api/admin/invites", values);
-        inviteOutput.textContent = "新邀请码：" + result.code + "（请通过可信渠道交给受邀人）";
+        inviteOutput.replaceChildren("已生成 " + result.codes.length + " 个邀请码，有效期 7 天。请逐一通过可信渠道发送给受邀人。",
+          make("textarea", { className: "invite-codes", readOnly: "", "aria-label": "本次生成的邀请码", text: result.codes.join("\n") }),
+          button("复制全部邀请码", async () => { await navigator.clipboard.writeText(result.codes.join("\n")); }, "secondary"));
       } catch (error) { feedback(inviteForm, error.message); }
       finally { release(); }
     });
@@ -533,13 +565,35 @@ function adminPage() {
       try { await post("/api/admin/departments", formData(departmentForm)); render(); }
       catch (error) { feedback(departmentForm, error.message); }
     });
+    const selectedStudents = new Set();
+    const studentCount = make("span", { className: "bulk-count", text: "已选 0 人" });
     const students = make("table", { className: "data" },
-      make("thead", {}, make("tr", {}, ["学号", "姓名", "院系", "当前节点", "操作"].map(x => make("th", { text: x })))),
+      make("thead", {}, make("tr", {}, make("th", { className: "bulk-select" }, make("input", { type: "checkbox", "aria-label": "选择全部学生", onchange: event => {
+        students.querySelectorAll("tbody input[type=checkbox]").forEach(box => { box.checked = event.target.checked; box.dispatchEvent(new Event("change")); });
+      } })), ["学号", "姓名", "院系", "当前节点", "操作"].map(x => make("th", { text: x })))),
       make("tbody", {}, data.students.map(student => make("tr", {},
+        make("td", { className: "bulk-select" }, make("input", { type: "checkbox", value: student.id, "aria-label": "选择 " + student.name, onchange: event => {
+          if (event.target.checked) selectedStudents.add(student.id); else selectedStudents.delete(student.id);
+          studentCount.textContent = "已选 " + selectedStudents.size + " 人";
+        } })),
         make("td", { text: student.student_no }), make("td", { text: student.name }),
         make("td", { text: student.department || "" }),
         make("td", { text: data.nodes.find(x => x.slug === student.current_node_slug)?.name || "" }),
         make("td", {}, button("管理", () => showStudent(student, data), "secondary"))))));
+    const bulkAction = async action => {
+      if (!selectedStudents.size) return feedback(bulkTools, "请先选择学生");
+      if (selectedStudents.size > 20) return feedback(bulkTools, "每次最多处理 20 名学生");
+      if (action === "advance" && !confirm("确认将所选 " + selectedStudents.size + " 名学生推进至下一培养阶段？")) return;
+      if (action === "delete" && prompt("将永久删除所选 " + selectedStudents.size + " 名学生的账号、档案、材料和对话。请输入“删除”确认：") !== "删除") return;
+      try {
+        const result = await post("/api/admin/students/bulk-" + action, { studentIds: [...selectedStudents] });
+        alert("已" + (action === "delete" ? "删除" : "推进") + " " + result.count + " 名学生。" + (result.cleanupFailed ? "有 " + result.cleanupFailed + " 份文件清理失败，已记录到服务器日志。" : ""));
+        render();
+      } catch (error) { feedback(bulkTools, error.message); }
+    };
+    const bulkTools = make("div", { className: "bulk-tools" }, studentCount,
+      button("批量推进下一阶段", () => bulkAction("advance")),
+      button("批量删除账号", () => bulkAction("delete"), "secondary"));
     const metrics = make("div", { className: "metric-grid" },
       metric("学生档案", String(data.students.length), "当前可管理的学生"),
       metric("院系", String(data.departments.length), "已配置院系"),
@@ -550,6 +604,7 @@ function adminPage() {
       panel(make("div", { className: "panel-head" }, make("h2", { text: "邀请新成员" })),
         inviteForm, inviteOutput),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "学生档案" }), make("span", { className: "small", text: "共 " + data.students.length + " 人" })),
+        data.students.length ? bulkTools : null,
         data.students.length ? tableWrap(students) : make("div", { className: "empty-state" }, make("strong", { text: "尚无学生" }), "先创建院系与邀请码，再邀请学生注册。")));
   } catch (error) { shell.replaceChildren(pageHead("STAFF / CONTROL CENTER", "辅导员工作台"), notice(error.message, "error")); } })();
   return shell;
@@ -611,10 +666,11 @@ function showStudent(student, data) {
   (async () => { try {
     const result = await api("/api/admin/students/" + student.id + "/files");
     const table = make("table", { className: "data" },
-      make("thead", {}, make("tr", {}, ["阶段", "材料", "文件", "提交时间"].map(text => make("th", { text })))),
+      make("thead", {}, make("tr", {}, ["阶段", "材料", "文件", "审阅状态", "提交时间"].map(text => make("th", { text })))),
       make("tbody", {}, result.files.map(file => make("tr", {},
         make("td", { text: file.stage_name }), make("td", { text: file.material_name }),
         make("td", {}, make("a", { href: "/api/checks/" + file.id + "/file", text: file.filename })),
+        make("td", { text: file.review_status || "待审阅" }),
         make("td", { text: file.checked_at })))));
     filesPanel.replaceChildren(make("div", { className: "panel-head" }, make("h2", { text: "已提交文件" }), make("span", { className: "small", text: result.files.length + " 份" })),
       result.files.length ? tableWrap(table) : make("div", { className: "empty-state" }, "这名学生尚未提交文件。"));

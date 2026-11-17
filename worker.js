@@ -34,6 +34,12 @@ function id(value) {
   assert(Number.isSafeInteger(number) && number > 0, "无效编号");
   return number;
 }
+function selectedIds(value, limit = 20) {
+  assert(Array.isArray(value) && value.length > 0 && value.length <= limit, "请选择 1 至 " + limit + " 条记录");
+  const ids = value.map(id);
+  assert(new Set(ids).size === ids.length, "选择中有重复记录");
+  return ids;
+}
 function validName(value) { return /^[a-zA-Z0-9_.-]{3,40}$/.test(value); }
 function validHex(value, length) { return new RegExp("^[a-f0-9]{" + length + "}$").test(value); }
 function sessionCookie(request) { return /(?:^|; )session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.get("cookie") || "")?.[1] || ""; }
@@ -358,10 +364,10 @@ export async function checkRoutes(request, env, path, user) {
   }
   if (path === "/api/checks" && request.method === "GET") {
     const rows = user.role === "student"
-      ? await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,m.name AS material_name FROM checks c JOIN materials m ON m.id=c.material_id WHERE c.student_id=? ORDER BY c.checked_at DESC LIMIT 50").bind(user.id).all()
+      ? await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,m.name AS material_name FROM checks c JOIN materials m ON m.id=c.material_id WHERE c.student_id=? ORDER BY c.checked_at DESC LIMIT 50").bind(user.id).all()
       : user.role === "admin"
-        ? await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,m.name AS material_name,p.name AS student_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id ORDER BY c.checked_at DESC LIMIT 100").all()
-        : await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,m.name AS material_name,p.name AS student_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id JOIN users u ON u.id=c.student_id WHERE u.department_id=? ORDER BY c.checked_at DESC LIMIT 100").bind(user.department_id).all();
+        ? await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,m.name AS material_name,p.name AS student_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id ORDER BY c.checked_at DESC LIMIT 100").all()
+        : await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,m.name AS material_name,p.name AS student_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id JOIN users u ON u.id=c.student_id WHERE u.department_id=? ORDER BY c.checked_at DESC LIMIT 100").bind(user.department_id).all();
     return json({ ok: true, checks: rows.results });
   }
   const match = /^\/api\/checks\/(\d+)\/(file|results)$/.exec(path);
@@ -457,10 +463,79 @@ export async function adminRoutes(request, env, path, user) {
       : await env.DB.prepare("SELECT i.id,i.role,i.department_id,d.name AS department,i.expires_at,i.used_by FROM invites i LEFT JOIN departments d ON d.id=i.department_id WHERE i.department_id=? ORDER BY i.id DESC LIMIT 100").bind(user.department_id).all();
     return json({ ok: true, students: students.results, departments: departments.results, nodes: nodes.results, materials: materials.results, invites: invites.results });
   }
+  if (path === "/api/admin/students/bulk-advance" && request.method === "POST") {
+    const ids = selectedIds((await bodyJson(request)).studentIds);
+    const stages = (await env.DB.prepare("SELECT slug,name FROM stages ORDER BY position").all()).results;
+    const students = await Promise.all(ids.map(studentId => targetStudent(env, user, studentId)));
+    const updates = [];
+    for (const student of students) {
+      const next = stages[stages.findIndex(stage => stage.slug === student.current_stage_slug) + 1];
+      assert(next, student.name + "已在最后阶段，无法继续推进", 409);
+      const firstNode = await env.DB.prepare("SELECT slug FROM nodes WHERE stage_slug=? ORDER BY position LIMIT 1").bind(next.slug).first();
+      assert(firstNode, next.name + "尚无培养节点", 409);
+      updates.push({ student, next, firstNode });
+    }
+    const today = iso().slice(0, 10);
+    await env.DB.batch(updates.flatMap(({ student, next, firstNode }) => [
+      env.DB.prepare("UPDATE profiles SET current_stage_slug=?,current_node_slug=?,node_entered_at=? WHERE user_id=?").bind(next.slug, firstNode.slug, today, student.id),
+      env.DB.prepare("INSERT INTO notifications(student_id,kind,title,content) VALUES(?,'lesson',?,?)").bind(student.id, "培养阶段已更新", "你的培养档案已推进至「" + next.name + "」，请查看本阶段材料清单。")
+    ]));
+    return json({ ok: true, count: updates.length });
+  }
+  if (path === "/api/admin/students/bulk-delete" && request.method === "POST") {
+    const ids = selectedIds((await bodyJson(request)).studentIds);
+    await Promise.all(ids.map(studentId => targetStudent(env, user, studentId)));
+    const marks = ids.map(() => "?").join(",");
+    const keys = await env.DB.prepare("SELECT r2_key FROM checks WHERE student_id IN (" + marks + ") UNION SELECT r2_key FROM material_records WHERE student_id IN (" + marks + ") AND r2_key IS NOT NULL").bind(...ids, ...ids).all();
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM invites WHERE used_by IN (" + marks + ")").bind(...ids),
+      env.DB.prepare("DELETE FROM notifications WHERE student_id IN (" + marks + ")").bind(...ids),
+      env.DB.prepare("DELETE FROM material_records WHERE student_id IN (" + marks + ")").bind(...ids),
+      env.DB.prepare("DELETE FROM check_results WHERE check_id IN (SELECT id FROM checks WHERE student_id IN (" + marks + "))").bind(...ids),
+      env.DB.prepare("DELETE FROM checks WHERE student_id IN (" + marks + ")").bind(...ids),
+      env.DB.prepare("DELETE FROM chat_messages WHERE session_id IN (SELECT id FROM chat_sessions WHERE student_id IN (" + marks + "))").bind(...ids),
+      env.DB.prepare("DELETE FROM chat_sessions WHERE student_id IN (" + marks + ")").bind(...ids),
+      env.DB.prepare("DELETE FROM mentor_question_logs WHERE user_id IN (" + marks + ")").bind(...ids),
+      env.DB.prepare("DELETE FROM mentor_usage WHERE user_id IN (" + marks + ")").bind(...ids),
+      env.DB.prepare("DELETE FROM sessions WHERE user_id IN (" + marks + ")").bind(...ids),
+      env.DB.prepare("DELETE FROM profiles WHERE user_id IN (" + marks + ")").bind(...ids),
+      env.DB.prepare("DELETE FROM users WHERE role='student' AND id IN (" + marks + ")").bind(...ids)
+    ]);
+    let cleanupFailed = 0;
+    for (let offset = 0; offset < keys.results.length; offset += 20) {
+      const results = await Promise.allSettled(keys.results.slice(offset, offset + 20).map(row => env.FILES.delete(row.r2_key)));
+      cleanupFailed += results.filter(result => result.status === "rejected").length;
+    }
+    if (cleanupFailed) console.error("R2 cleanup failed after student removal", { count: cleanupFailed });
+    return json({ ok: true, count: ids.length, cleanupFailed });
+  }
+  if (path === "/api/admin/checks/bulk-review" && request.method === "POST") {
+    const data = await bodyJson(request), ids = selectedIds(data.checkIds);
+    const status = clean(data.status, 20), note = clean(data.note, 500);
+    assert(["已通过", "退回修改"].includes(status), "审阅状态无效");
+    assert(status !== "退回修改" || note, "退回材料时请填写修改说明");
+    const marks = ids.map(() => "?").join(",");
+    const rows = await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.review_status,c.filename,m.name AS material_name,u.department_id FROM checks c JOIN users u ON u.id=c.student_id JOIN materials m ON m.id=c.material_id WHERE c.id IN (" + marks + ")").bind(...ids).all();
+    assert(rows.results.length === ids.length, "部分材料不存在", 404);
+    const updates = [];
+    for (const row of rows.results) {
+      assert(user.role === "admin" || row.department_id === user.department_id, "无权审阅其他院系材料", 403);
+      assert(row.review_status === "待审阅", row.filename + "已审阅，请刷新列表", 409);
+      const latest = await env.DB.prepare("SELECT id FROM checks WHERE student_id=? AND material_id=? ORDER BY id DESC LIMIT 1").bind(row.student_id, row.material_id).first();
+      assert(latest?.id === row.id, row.filename + "已被新提交版本替代", 409);
+      updates.push(row);
+    }
+    await env.DB.batch(updates.flatMap(row => [
+      env.DB.prepare("UPDATE checks SET review_status=?,review_note=?,reviewed_by=?,reviewed_at=? WHERE id=?").bind(status, note, user.id, iso(), row.id),
+      env.DB.prepare("UPDATE material_records SET status=? WHERE student_id=? AND material_id=?").bind(status === "已通过" ? "已通过" : "未交", row.student_id, row.material_id),
+      env.DB.prepare("INSERT INTO notifications(student_id,kind,title,content) VALUES(?,'lesson',?,?)").bind(row.student_id, "材料审阅结果：" + row.material_name, status === "已通过" ? "你提交的「" + row.material_name + "」已通过审阅。" : "你提交的「" + row.material_name + "」需修改：" + note)
+    ]));
+    return json({ ok: true, count: updates.length });
+  }
   const filesMatch = /^\/api\/admin\/students\/(\d+)\/files$/.exec(path);
   if (filesMatch && request.method === "GET") {
     const student = await targetStudent(env, user, filesMatch[1]);
-    const rows = await env.DB.prepare("SELECT c.id,c.filename,c.checked_at,m.name AS material_name,s.name AS stage_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN stages s ON s.slug=m.stage_slug WHERE c.student_id=? ORDER BY c.checked_at DESC,c.id DESC LIMIT 100").bind(student.id).all();
+    const rows = await env.DB.prepare("SELECT c.id,c.filename,c.checked_at,c.review_status,c.review_note,m.name AS material_name,s.name AS stage_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN stages s ON s.slug=m.stage_slug WHERE c.student_id=? ORDER BY c.checked_at DESC,c.id DESC LIMIT 100").bind(student.id).all();
     return json({ ok: true, files: rows.results });
   }
   if (path === "/api/admin/departments" && request.method === "POST") {
@@ -477,10 +552,13 @@ export async function adminRoutes(request, env, path, user) {
     if (role === "counselor") assert(user.role === "admin", "仅管理员可邀请辅导员", 403);
     const department = await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(departmentId).first();
     assert(department, "院系不存在", 404);
-    const code = randomHex(24);
-    await env.DB.prepare("INSERT INTO invites(code_hash,role,department_id,expires_at,created_by) VALUES(?,?,?,?,?)")
-      .bind(await sha256(code), role, departmentId, new Date(Date.now() + 7 * 86400000).toISOString(), user.id).run();
-    return json({ ok: true, code, expiresInDays: 7 }, 201);
+    const count = Number(data.count ?? 1);
+    assert(Number.isSafeInteger(count) && count >= 1 && count <= 50, "一次可生成 1 至 50 个邀请码");
+    const codes = Array.from({ length: count }, () => randomHex(24));
+    const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+    await env.DB.batch(await Promise.all(codes.map(async code => env.DB.prepare("INSERT INTO invites(code_hash,role,department_id,expires_at,created_by) VALUES(?,?,?,?,?)")
+      .bind(await sha256(code), role, departmentId, expiresAt, user.id))));
+    return json({ ok: true, codes, code: codes[0], expiresInDays: 7 }, 201);
   }
   const studentMatch = /^\/api\/admin\/students\/(\d+)$/.exec(path);
   const profileMatch = /^\/api\/admin\/students\/(\d+)\/profile$/.exec(path);
