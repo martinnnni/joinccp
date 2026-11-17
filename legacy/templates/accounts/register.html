@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}学生注册 · 党员发展计划辅助系统{% endblock %}
+{% block content %}
+<div class="auth-card panel">
+  <h1 class="page-title">学生注册</h1>
+  <p class="muted">注册后将自动创建个人党员发展进度档案。</p>
+  <form method="post" class="auth-form">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit" class="btn">注册</button>
+  </form>
+  <p class="auth-alt">已有账号？<a href="{% url 'login' %}">登录</a></p>
+</div>
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}通知 · 党员发展计划辅助系统{% endblock %}
+{% block content %}
+<h1 class="page-title">通知</h1>
+{% for n in notifications %}
+  <div class="notice {% if not n.is_read %}unread{% endif %}">
+    <h3>{{ n.title }} <span class="muted">· {{ n.get_kind_display }}</span></h3>
+    <p>{{ n.content }}</p>
+    <p class="meta">{{ n.created_at|date:"Y-m-d H:i" }}
+      {% if not n.is_read %}<a href="{% url 'notification_read' n.pk %}">标为已读</a>{% endif %}
+    </p>
+  </div>
+{% empty %}
+  <div class="panel muted">暂无通知。</div>
+{% endfor %}
+{% endblock %}

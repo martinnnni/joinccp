@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}成长导师 · 党员发展计划辅助系统{% endblock %}
+{% block content %}
+<h1 class="page-title">个性化成长导师</h1>
+
+<div class="panel chat-wrap">
+  <div class="chat-log" id="chat-log">
+    <div class="muted">你好，我是成长导师。关于入党流程、材料准备，都可以问我。</div>
+  </div>
+  <form class="chat-form" id="chat-form">
+    {% csrf_token %}
+    <input type="hidden" id="session-id" value="">
+    <input type="text" id="chat-input" placeholder="输入你的问题…" autocomplete="off">
+    <button type="submit" class="btn">发送</button>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function getCookie(name) {
+  var m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+  return m ? m.pop() : '';
+}
+var form = document.getElementById('chat-form');
+var input = document.getElementById('chat-input');
+var log = document.getElementById('chat-log');
+var sessionId = document.getElementById('session-id');
+
+function append(role, text) {
+  var div = document.createElement('div');
+  div.className = 'msg ' + role;
+  var who = document.createElement('div');
+  who.className = 'who';
+  who.textContent = role === 'assistant' ? '导师' : '我';
+  var body = document.createElement('div');
+  body.className = 'body';
+  body.textContent = text;
+  div.appendChild(who);
+  div.appendChild(body);
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+form.addEventListener('submit', function (e) {
+  e.preventDefault();
+  var content = input.value.trim();
+  if (!content) return;
+  append('user', content);
+  input.value = '';
+  var fd = new FormData();
+  fd.append('content', content);
+  fd.append('session_id', sessionId.value);
+  fetch("{% url 'chat_api' %}", {
+    method: 'POST',
+    headers: {'X-CSRFToken': getCookie('csrftoken')},
+    body: fd
+  }).then(function (r) { return r.json(); }).then(function (data) {
+    if (data.ok) {
+      sessionId.value = data.session_id;
+      append('assistant', data.reply);
+    } else {
+      append('assistant', '（出错：' + (data.error || '未知') + '）');
+    }
+  }).catch(function () {
+    append('assistant', '（请求失败，请重试。）');
+  });
+});
+</script>
+{% endblock %}

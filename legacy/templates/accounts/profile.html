@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}我的档案 · 党员发展计划辅助系统{% endblock %}
+{% block content %}
+<h1 class="page-title">我的档案</h1>
+
+<div class="panel">
+  <p><strong>{{ profile.name }}</strong>（学号 {{ profile.student_no }}）</p>
+  <p class="muted">{{ profile.department }} · {{ profile.major|default:"专业未填" }} · {{ profile.grade|default:"年级未填" }}</p>
+  <p>
+    当前阶段：<strong>{{ stage.name|default:"未开始" }}</strong>
+    {% if node %} · 当前节点：<strong>{{ node.name }}</strong>{% endif %}
+    {% if node.duration_rule %} · 时间要求：<span class="muted">{{ node.duration_rule }}</span>{% endif %}
+  </p>
+  {% if next_node %}<p class="muted">下一步：{{ next_node.name }}</p>{% endif %}
+</div>
+
+<h2 class="section-title">本阶段材料清单</h2>
+<div class="panel">
+  <table class="data">
+    <thead>
+      <tr>
+        <th>材料名称</th><th>类别</th><th>填写方式</th><th>撰写要点</th><th>状态</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in materials %}
+      <tr>
+        <td>{{ item.material.name }}</td>
+        <td>{{ item.material.get_category_display }}</td>
+        <td>{{ item.material.get_fill_method_display }}</td>
+        <td class="muted">{{ item.material.writing_points|default:"—" }}</td>
+        <td>
+          {% if item.status == "已通过" %}
+            <span class="badge done">已通过</span>
+          {% elif item.status == "已交" %}
+            <span class="badge done">已交</span>
+          {% else %}
+            <span class="badge missing">缺失</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="muted">暂无本阶段材料。</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

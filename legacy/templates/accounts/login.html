@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}登录 · 党员发展计划辅助系统{% endblock %}
+{% block content %}
+<div class="auth-card panel">
+  <h1 class="page-title">登录</h1>
+  <form method="post" class="auth-form">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit" class="btn">登录</button>
+  </form>
+  <p class="auth-alt">还没有账号？<a href="{% url 'register' %}">学生注册</a></p>
+</div>
+{% endblock %}

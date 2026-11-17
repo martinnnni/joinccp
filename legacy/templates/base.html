@@ -1,0 +1,50 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}党员发展计划辅助系统{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'css/main.css' %}">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="{% if user.is_authenticated %}{% url 'profile' %}{% else %}{% url 'login' %}{% endif %}">
+        <span class="brand-mark">党</span>
+        <span class="brand-text">党员发展计划辅助系统</span>
+      </a>
+      <nav class="nav">
+        {% if user.is_authenticated %}
+          <a href="{% url 'profile' %}">我的档案</a>
+          <a href="{% url 'check' %}">材料质检</a>
+          <a href="{% url 'mentor' %}">成长导师</a>
+          <a href="{% url 'notifications' %}">通知</a>
+          <form class="logout-form" method="post" action="{% url 'logout' %}">
+            {% csrf_token %}
+            <button type="submit" class="linklike">退出</button>
+          </form>
+        {% else %}
+          <a href="{% url 'login' %}">登录</a>
+          <a href="{% url 'register' %}">学生注册</a>
+        {% endif %}
+      </nav>
+    </div>
+  </header>
+
+  <main class="container main">
+    {% if messages %}
+      <ul class="messages">
+        {% for message in messages %}<li class="message {{ message.tags }}">{{ message }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">党员发展计划辅助系统 · 内容仅供党务工作参考</div>
+  </footer>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

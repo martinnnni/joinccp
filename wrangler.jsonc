@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "joinccp-preview",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "vars": {
+    "RAG_MIN_SIMILARITY": "0.40",
+    "INTENT_MODEL": "deepseek-flash"
+  },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "joinccp-preview",
+    "database_id": "b773ac19-0960-41dd-ad4e-8b8eee2c47ea",
+    "migrations_dir": "migrations"
+  }],
+  "r2_buckets": [{
+    "binding": "FILES",
+    "bucket_name": "joinccp-private"
+  }],
+  "triggers": { "crons": ["0 1 * * *"] },
+  "observability": { "enabled": true },
+  "routes": [{
+    "pattern": "joinccp.martinzhang.asia",
+    "custom_domain": true
+  }]
+}

@@ -1,0 +1,10 @@
+# 后端依赖（Python 3.12）。生产环境另需 gunicorn，见 deploy/README.md。
+Django==5.1.4
+pymysql==1.1.1
+cryptography==44.0.0
+neo4j==5.27.0
+celery==5.4.0
+redis==5.2.1
+openai==1.59.9
+python-docx==1.1.2
+python-dotenv==1.0.1

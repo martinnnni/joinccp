@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}材料质检 · 党员发展计划辅助系统{% endblock %}
+{% block content %}
+<h1 class="page-title">智能材料质检</h1>
+
+<div class="panel">
+  <h2 class="section-title" style="margin-top:0">上传材料</h2>
+  <p class="muted">上传 .docx 文件，系统将做格式规则检查与 AI 易错点提示。AI 建议仅供参考。</p>
+  <form id="check-form">
+    {% csrf_token %}
+    <p>
+      <label for="material_id">选择材料</label>
+      <select id="material_id" name="material_id" required>
+        <option value="">— 请选择 —</option>
+        {% for m in materials %}<option value="{{ m.pk }}">{{ m.name }}</option>{% endfor %}
+      </select>
+    </p>
+    <p>
+      <label for="docx">材料文件（.docx）</label>
+      <input type="file" id="docx" name="docx" accept=".docx" required>
+    </p>
+    <button type="submit" class="btn" id="check-btn">开始质检</button>
+  </form>
+</div>
+
+<div class="panel" id="results-panel" hidden>
+  <h2 class="section-title" style="margin-top:0">质检结果</h2>
+  <div id="results"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function getCookie(name) {
+  var m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+  return m ? m.pop() : '';
+}
+var form = document.getElementById('check-form');
+var resultsPanel = document.getElementById('results-panel');
+var resultsDiv = document.getElementById('results');
+var btn = document.getElementById('check-btn');
+form.addEventListener('submit', function (e) {
+  e.preventDefault();
+  btn.disabled = true;
+  btn.textContent = '质检中…';
+  var fd = new FormData(form);
+  fetch("{% url 'check_api' %}", {
+    method: 'POST',
+    headers: {'X-CSRFToken': getCookie('csrftoken')},
+    body: fd
+  }).then(function (r) { return r.json(); }).then(function (data) {
+    resultsPanel.hidden = false;
+    if (!data.ok) {
+      resultsDiv.innerHTML = '<p class="muted">' + (data.error || '质检失败') + '</p>';
+      return;
+    }
+    var html = '';
+    var rules = data.results.filter(function (r) { return r.kind === 'rule'; });
+    var ais = data.results.filter(function (r) { return r.kind === 'ai'; });
+    if (rules.length === 0) {
+      html += '<div class="result"><span class="kind-label">规则检查</span><p class="muted">未发现格式问题。</p></div>';
+    }
+    rules.forEach(function (r) {
+      html += '<div class="result"><span class="kind-label">规则检查' + (r.severity ? ' · ' + r.severity : '') + '</span>'
+        + '<p><strong>' + r.message + '</strong></p>'
+        + (r.suggestion ? '<p class="muted">' + r.suggestion + '</p>' : '') + '</div>';
+    });
+    ais.forEach(function (r) {
+      html += '<div class="result"><span class="badge ai">AI 建议 · 仅供参考</span><p>' + r.message.replace(/\n/g, '<br>') + '</p></div>';
+    });
+    resultsDiv.innerHTML = html;
+  }).catch(function (err) {
+    resultsPanel.hidden = false;
+    resultsDiv.innerHTML = '<p class="muted">请求失败，请重试。</p>';
+  }).finally(function () {
+    btn.disabled = false;
+    btn.textContent = '开始质检';
+  });
+});
+</script>
+{% endblock %}
