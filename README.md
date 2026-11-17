@@ -1,5 +1,7 @@
 # 党员发展计划辅助系统 · Cloudflare 测试版
 
+**线上网站：**[joinccp.martinzhang.asia](https://joinccp.martinzhang.asia/) · [成长导师](https://joinccp.martinzhang.asia/#mentor)
+
 此目录将原 Django 项目改写为 Cloudflare Worker。原业务源码保存在 legacy/，未复制压缩包中的密钥文件、本机虚拟环境、工具源码和日志。
 
 页眉使用[中国民航大学官网](https://www.cauc.edu.cn/zhv5/)的校徽与校名题字图片（`public/cauc-wordmark.png`）；项目名称沿用原项目的“党员发展计划辅助系统”。当前界面借鉴 martinzhang.asia 博客的大字号排版、细网格与轨道图形，保持白底。拉丁字形使用开源的 [Space Grotesk](https://github.com/floriankarsten/space-grotesk) 与 [DM Mono](https://github.com/googlefonts/dm-mono)，授权文本位于 `public/fonts/`。
