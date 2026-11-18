@@ -677,13 +677,12 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
   :root { --page-gutter: 20px; }
   .container { width: min(100% - 40px, 1370px); }
   .header-inner { width: min(100% - 40px, 1370px); }
-  .brand { justify-content: center; }
   .school-wordmark { width: 184px; }
   .nav { gap: 20px; }
   .nav a, .nav .linklike { font-size: 14px; }
   .auth-layout { display: block; min-height: 0; }
   .auth-story { min-height: min(66svh, 500px); padding: 32px 20px 24px; }
-  .auth-story-copy { width: 100%; margin: 0 0 28px; text-align: center; }
+  .auth-story-copy { width: 100%; margin: auto 0; text-align: left; }
   .auth-story h1 { font-size: clamp(40px, 11.5vw, 54px); line-height: 1.12; }
   .story-intro { margin-bottom: 16px; padding-bottom: 8px; font-size: 14px; }
   .auth-story-copy p { max-width: 100%; font-size: 16px; line-height: 1.6; }
