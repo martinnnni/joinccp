@@ -80,11 +80,13 @@ function nav() {
     ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ["mentor", "成长导师"], ["notifications", "通知"]]
     : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"]])
     : (config?.initialized ? [] : [["bootstrap", "初始化"]]);
+  const scroll = make("div", { className: "nav-scroll" });
   for (const [page, label] of items) {
     const link = make("a", { href: "#" + page, text: label, className: active === page ? "active" : "" });
     if (page === "mentor") link.addEventListener("click", event => { event.preventDefault(); openMentor(); });
-    navigation.append(link);
+    scroll.append(link);
   }
+  navigation.append(scroll);
   if (me) {
     const logout = async () => { await post("/api/logout", {}); me = null; mentorHistory = []; navigate("login"); };
     const profileMenu = make("details", { className: "nav-profile" },
