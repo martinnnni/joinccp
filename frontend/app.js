@@ -405,9 +405,15 @@ function mentorPage() {
         make("strong", { text: mentorTitle() }),
         make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })));
     const header = make("header", { className: "mentor-topbar" }, make("div", { className: "mentor-topbar-left" }, menu, newChat()));
-    const workflow = me?.role === "counselor" ? select("工作流", "mentorWorkflow", [["chat", "普通问答"], ["auto-register", "自动注册"]]) : null;
-    if (workflow) workflow.querySelector("select").addEventListener("change", event => {
-      workflowMode = event.target.value;
+    const workflowToggle = me?.role === "counselor" ? make("input", { type: "checkbox", "aria-label": "启用工作流" }) : null;
+    const workflowChoice = workflowToggle ? make("select", { "aria-label": "选择工作流", disabled: "" },
+      make("option", { value: "auto-register", text: "自动注册" })) : null;
+    const workflow = workflowToggle ? make("div", { className: "mentor-workflow-bar" },
+      make("label", { className: "mentor-workflow-toggle" }, workflowToggle, make("span", { text: "启用工作流" })),
+      make("label", { className: "mentor-workflow-choice" }, make("span", { text: "执行" }), workflowChoice)) : null;
+    const syncWorkflow = () => {
+      workflowChoice.disabled = !workflowToggle.checked;
+      workflowMode = workflowToggle.checked ? workflowChoice.value : "chat";
       const registering = workflowMode === "auto-register";
       fileInput.accept = registering ? ".xlsx,.csv,.txt,.docx,.pdf" : ".docx,.pdf";
       fileInput.setAttribute("aria-label", registering ? "上传入围名单" : "选择 Word DOCX 或 PDF 文件");
@@ -415,8 +421,9 @@ function mentorPage() {
       attach.title = registering ? "上传 XLSX、CSV、TXT、DOCX 或 PDF 名单" : "上传 Word DOCX 或 PDF";
       textarea.placeholder = registering ? "也可粘贴名单，每行：姓名 学号" : status.enabled ? "向成长导师提问…" : "检索培养资料…";
       reset();
-    });
-    const content = make("div", { className: "mentor-content" }, workflow, log, form);
+    };
+    if (workflow) { workflowToggle.addEventListener("change", syncWorkflow); workflowChoice.addEventListener("change", syncWorkflow); }
+    const content = make("div", { className: "mentor-content" }, log, workflow, form);
     shell.replaceChildren(aside, make("section", { className: "mentor-main", "aria-label": "成长导师" }, hero, header, content));
     if (mentorHistory.length) for (const item of mentorHistory) appendMessage(item); else log.append(empty);
     const resize = () => { textarea.style.height = "auto"; textarea.style.height = Math.min(textarea.scrollHeight, 176) + "px"; };
