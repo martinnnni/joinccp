@@ -4,7 +4,7 @@ const maxBytes = 10 * 1024 * 1024;
 const maxText = 20000;
 const wordNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
-export async function extractReviewText(file) {
+export async function extractReviewText(file, minimumTextLength = 20) {
   if (!file || file.size < 10 || file.size > maxBytes) throw new Error("请选择不超过 10 MB 的 Word DOCX 或 PDF 文件");
   if (/\.doc$/i.test(file.name)) throw new Error("旧版 .doc 暂不能可靠读取，请在 Word 中另存为 .docx 后上传");
   const isWord = /\.docx$/i.test(file.name);
@@ -15,7 +15,7 @@ export async function extractReviewText(file) {
   if (isPdf && new TextDecoder().decode(bytes.slice(0, 5)) !== "%PDF-") throw new Error("PDF 文件格式无效");
   const content = isWord ? await readDocx(bytes) : await readPdf(bytes);
   const text = content.replace(/\u0000/g, "").trim();
-  if (text.length < 20) throw new Error("未能提取足够文字；扫描版 PDF 请先转为可搜索 PDF 或 DOCX");
+  if (text.length < minimumTextLength) throw new Error("未能提取足够文字；扫描版 PDF 请先转为可搜索 PDF 或 DOCX");
   if (text.length > maxText) throw new Error("文档文字超过 20000 字，请拆分后检查");
   return text;
 }

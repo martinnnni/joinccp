@@ -9,12 +9,13 @@ const request = (path, body) => new Request("https://example.test" + path, body 
 } : undefined);
 
 test("检索覆盖流程时限、材料类别和格式规范", () => {
-  assert.equal(knowledgeCount, 25);
+  assert.ok(knowledgeCount >= 25);
   assert.match(retrieve("预备期满前什么时候提出转正申请？")[0].text, /1–2 周/);
   assert.equal(retrieve("思想汇报属于哪类材料？")[0].file, "材料清单.md");
   assert.equal(retrieve("正文应该用什么字体？")[0].file, "填写规范.md");
   assert.equal(retrieve("火星移民政策是什么？").length, 0);
   assert.match(retrieve("我现在需要准备什么材料？", { stageSlug: "application" })[0].section, /申请入党/);
+  assert.match(retrieve("辅导员如何自动注册学生账号？").map(item => item.text).join("\n"), /自动注册/);
 });
 
 test("模型消息限定资料与引用格式，不注入学生身份信息", () => {

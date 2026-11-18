@@ -49,7 +49,7 @@ function deviceCookie(request) { return /(?:^|; )device=([a-f0-9]{32})(?:;|$)/.e
 async function currentUser(request, env) {
   const token = sessionCookie(request);
   if (!token) return null;
-  return env.DB.prepare("SELECT u.id,u.username,u.role,u.department_id,COALESCE(NULLIF(u.name,''),p.name) AS name,p.student_no,p.major,p.grade,p.phone,p.applied_at,p.current_stage_slug,p.current_node_slug,p.node_entered_at,p.is_graduate FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN profiles p ON p.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?")
+  return env.DB.prepare("SELECT u.id,u.username,u.role,u.department_id,u.must_change_password,COALESCE(NULLIF(u.name,''),p.name) AS name,p.student_no,p.major,p.grade,p.phone,p.applied_at,p.current_stage_slug,p.current_node_slug,p.node_entered_at,p.is_graduate FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN profiles p ON p.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?")
     .bind(await sha256(token), iso()).first();
 }
 const bodyJson = request => request.json().catch(() => ({}));
@@ -128,19 +128,17 @@ async function authRoutes(request, env, path) {
     const invite = await env.DB.prepare("SELECT * FROM invites WHERE code_hash=? AND used_by IS NULL AND expires_at>?")
       .bind(await sha256(code), iso()).first();
     assert(invite, "邀请码无效或已过期", 403);
+    assert(invite.role === "counselor", "此邀请码不适用于辅导员注册", 403);
     const name = clean(data.name, 50);
     const username = clean(data.username, 40);
     assert(name, "请填写姓名");
     assert(validName(username), "用户名只能包含字母、数字、点、横线或下划线，长度为 3 至 40 位");
-    const studentNo = invite.role === "student" ? username : "";
     const verifier = await hmac(env.AUTH_PEPPER, username.toLowerCase() + ":" + data.verifier);
     let userId = null;
     try {
       const result = await env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name) VALUES(?,?,?,?,?,?)")
         .bind(username, data.salt, verifier, invite.role, invite.department_id, name).run();
       userId = result.meta.last_row_id;
-      if (invite.role === "student") await env.DB.prepare("INSERT INTO profiles(user_id,name,student_no,major,grade,phone,applied_at,node_entered_at) VALUES(?,?,?,?,?,?,?,?)")
-        .bind(userId, name, studentNo, "", "", "", null, iso().slice(0, 10)).run();
       const updated = await env.DB.prepare("UPDATE invites SET used_by=? WHERE id=? AND used_by IS NULL").bind(userId, invite.id).run();
       assert(updated.meta.changes === 1, "邀请码已被使用", 409);
       return json({ ok: true, username }, 201, { "set-cookie": await startSession(env, userId) });
@@ -156,8 +154,11 @@ async function authRoutes(request, env, path) {
     const username = clean(data.username, 40), verifier = clean(data.verifier, 64);
     assert(validName(username) && validHex(verifier, 64), "账号资料无效");
     const limitKey = await loginLimit(env, request, username, true);
-    const row = await env.DB.prepare("SELECT id,password_verifier FROM users WHERE username=? COLLATE NOCASE").bind(username).first();
-    const got = await hmac(env.AUTH_PEPPER, username.toLowerCase() + ":" + verifier);
+    const row = await env.DB.prepare("SELECT id,password_verifier,must_change_password FROM users WHERE username=? COLLATE NOCASE").bind(username).first();
+    const initialPassword = clean(data.initialPassword, 100);
+    const got = row?.must_change_password
+      ? await hmac(env.AUTH_PEPPER, "initial:" + username.toLowerCase() + ":" + initialPassword)
+      : await hmac(env.AUTH_PEPPER, username.toLowerCase() + ":" + verifier);
     assert(row && equal(row.password_verifier, got), "用户名或密码错误", 401);
     await env.DB.prepare("DELETE FROM login_attempts WHERE key=?").bind(limitKey).run();
     return json({ ok: true }, 200, { "set-cookie": await startSession(env, row.id) });
@@ -173,12 +174,18 @@ async function authRoutes(request, env, path) {
 async function changePassword(request, env, user) {
   requireSecret(env);
   const data = await bodyJson(request);
-  assert(validHex(data.oldVerifier, 64) && validHex(data.newVerifier, 64) && validHex(data.newSalt, 32), "密码资料无效");
-  const row = await env.DB.prepare("SELECT password_verifier FROM users WHERE id=?").bind(user.id).first();
-  const old = await hmac(env.AUTH_PEPPER, user.username.toLowerCase() + ":" + data.oldVerifier);
+  assert(validHex(data.newVerifier, 64) && validHex(data.newSalt, 32), "密码资料无效");
+  const row = await env.DB.prepare("SELECT password_verifier,must_change_password FROM users WHERE id=?").bind(user.id).first();
+  const old = row?.must_change_password
+    ? await hmac(env.AUTH_PEPPER, "initial:" + user.username.toLowerCase() + ":" + clean(data.oldPassword, 100))
+    : await hmac(env.AUTH_PEPPER, user.username.toLowerCase() + ":" + data.oldVerifier);
   assert(row && equal(row.password_verifier, old), "当前密码错误", 403);
+  if (row.must_change_password) {
+    assert(clean(data.oldPassword, 100) === "cauc+" + user.username, "初始密码错误", 403);
+    assert(clean(data.newPassword, 100) && clean(data.newPassword, 100) !== data.oldPassword, "新密码不能与初始密码相同");
+  } else assert(validHex(data.oldVerifier, 64), "密码资料无效");
   const replacement = await hmac(env.AUTH_PEPPER, user.username.toLowerCase() + ":" + data.newVerifier);
-  await env.DB.prepare("UPDATE users SET password_salt=?,password_verifier=? WHERE id=?").bind(data.newSalt, replacement, user.id).run();
+  await env.DB.prepare("UPDATE users SET password_salt=?,password_verifier=?,must_change_password=0 WHERE id=?").bind(data.newSalt, replacement, user.id).run();
   const tokenHash = await sha256(sessionCookie(request));
   await env.DB.prepare("DELETE FROM sessions WHERE user_id=? AND token_hash<>?").bind(user.id, tokenHash).run();
   return json({ ok: true });
@@ -497,6 +504,38 @@ export async function formRoutes(request, env, path, user) {
 export async function adminRoutes(request, env, path, user) {
   if (!path.startsWith("/api/admin/")) return null;
   assert(isStaff(user), "需要辅导员或管理员权限", 403);
+  if (path === "/api/admin/students/auto-register" && request.method === "POST") {
+    requireSecret(env);
+    assert(user.role === "counselor", "仅辅导员可执行自动注册", 403);
+    assert(user.department_id, "辅导员尚未分配院系", 403);
+    const data = await bodyJson(request);
+    assert(Array.isArray(data.students) && data.students.length >= 1 && data.students.length <= 50, "每次可注册 1 至 50 名学生");
+    const students = data.students.map(item => ({ name: clean(item?.name, 50), studentNo: clean(item?.studentNo, 40) }));
+    for (const student of students) {
+      assert(/^[\p{Script=Han}·]{2,20}$/u.test(student.name), "姓名须为 2 至 20 个汉字或间隔号");
+      assert(/^\d{6,20}$/.test(student.studentNo), "学号须为 6 至 20 位数字");
+    }
+    const numbers = students.map(student => student.studentNo);
+    assert(new Set(numbers).size === numbers.length, "名单中有重复学号");
+    const marks = numbers.map(() => "?").join(",");
+    const existing = await env.DB.prepare("SELECT username FROM users WHERE username IN (" + marks + ")").bind(...numbers).all();
+    assert(existing.results.length === 0, "已有学号注册，请移除重复项后重试：" + existing.results.map(row => row.username).join("、"), 409);
+    const statements = [];
+    for (const student of students) {
+      const salt = randomHex(16);
+      const initial = await hmac(env.AUTH_PEPPER, "initial:" + student.studentNo.toLowerCase() + ":cauc+" + student.studentNo);
+      statements.push(env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name,must_change_password) VALUES(?,?,?,'student',?,?,1)")
+        .bind(student.studentNo, salt, initial, user.department_id, student.name));
+      statements.push(env.DB.prepare("INSERT INTO profiles(user_id,name,student_no,major,grade,phone,applied_at,node_entered_at) SELECT id,?,?, '', '', '', NULL, ? FROM users WHERE username=?")
+        .bind(student.name, student.studentNo, iso().slice(0, 10), student.studentNo));
+    }
+    try { await env.DB.batch(statements); }
+    catch (error) {
+      if (String(error).includes("UNIQUE")) throw new HttpError(409, "部分学号已注册，请刷新名单后重试");
+      throw error;
+    }
+    return json({ ok: true, count: students.length }, 201);
+  }
   if (path === "/api/admin/dashboard" && request.method === "GET") {
     const students = user.role === "admin"
       ? await env.DB.prepare("SELECT u.id,u.username,u.department_id,d.name AS department,p.* FROM users u JOIN profiles p ON p.user_id=u.id LEFT JOIN departments d ON d.id=u.department_id ORDER BY p.student_no LIMIT 500").all()
@@ -592,10 +631,9 @@ export async function adminRoutes(request, env, path, user) {
     return json({ ok: true, departmentId: result.meta.last_row_id }, 201);
   }
   if (path === "/api/admin/invites" && request.method === "POST") {
+    assert(user.role === "admin", "仅管理员可邀请辅导员", 403);
     const data = await bodyJson(request), role = clean(data.role, 20), departmentId = id(data.departmentId);
-    assert(role === "student" || role === "counselor", "角色无效");
-    assert(user.role === "admin" || departmentId === user.department_id, "无权邀请其他院系", 403);
-    if (role === "counselor") assert(user.role === "admin", "仅管理员可邀请辅导员", 403);
+    assert(role === "counselor", "邀请码仅用于辅导员注册");
     const department = await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(departmentId).first();
     assert(department, "院系不存在", 404);
     const count = Number(data.count ?? 1);
@@ -674,6 +712,7 @@ export default {
       const guestMentor = !user && (path === "/api/mentor" || path === "/api/mentor/chat" || path === "/api/mentor/retrieve");
       if (!guestMentor) assert(user, "请先登录", 401);
       if (path === "/api/change-password" && request.method === "POST") return secured(await changePassword(request, env, user));
+      if (user?.must_change_password && path !== "/api/me") throw new HttpError(403, "首次登录请先修改初始密码");
       response = await mentorRoutes(request, env, path, user)
         || await studentRoutes(request, env, path, user)
         || await checkRoutes(request, env, path, user)

@@ -265,6 +265,21 @@
 .mentor-row.user .mentor-bubble { max-width: min(86%, 620px); padding: 11px 16px; border-radius: 14px 14px 3px 14px; background: #f6f0f1; }
 .mentor-row.assistant .mentor-bubble { padding-top: 3px; }
 .mentor-message { color: var(--mentor-ink); font-size: 14px; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mentor-row.assistant .mentor-message { white-space: normal; }
+.mentor-message p { margin: 0 0 8px; }
+.mentor-message p:last-child { margin-bottom: 0; }
+.mentor-message ul, .mentor-message ol { margin: 2px 0 8px; padding-left: 20px; }
+.mentor-message li { margin: 2px 0; }
+.mentor-message strong { font-weight: 700; }
+.mentor-message em { font-style: italic; }
+.mentor-message code { font-family: var(--mono, ui-monospace, SFMono-Regular, monospace); background: rgba(165, 31, 45, .07); padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+.mentor-message pre { background: #f7f1f2; border: 1px solid var(--mentor-line, #efe8e9); border-radius: 8px; padding: 10px 12px; margin: 0 0 8px; overflow-x: auto; }
+.mentor-message pre code { background: none; padding: 0; }
+.mentor-message h1, .mentor-message h2, .mentor-message h3, .mentor-message h4 { margin: 4px 0 6px; font-weight: 700; line-height: 1.35; }
+.mentor-message h1 { font-size: 1.2em; }
+.mentor-message h2 { font-size: 1.12em; }
+.mentor-message h3, .mentor-message h4 { font-size: 1.02em; }
+.mentor-message a { color: var(--accent, #a51f2d); text-decoration: underline; }
 .mentor-sources { margin-top: 14px; border-top: 1px solid var(--mentor-line); }
 .mentor-sources summary { padding: 10px 0; color: var(--accent, #a51f2d); font-size: 12px; font-weight: 600; cursor: pointer; }
 .mentor-source { padding: 11px 0; border-top: 1px solid #f5eff0; font-size: 12px; }
@@ -349,3 +364,17 @@
   .mentor-app *, .mentor-app *::before, .mentor-app *::after,
   .mentor-fab, .mentor-panel, .mentor-panel * { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
+
+.mentor-content > .field { width: min(100% - 48px, 780px); margin: 12px auto 0; }
+.mentor-content > .field select { width: 100%; }
+.mentor-content > [hidden] { display: none !important; }
+.roster-workflow { flex: 1; overflow: auto; width: min(100% - 48px, 780px); margin: 24px auto; padding-bottom: 24px; }
+.roster-workflow h2 { margin: 0 0 10px; color: #a51f2d; font-size: clamp(25px, 4vw, 38px); }
+.roster-workflow > p { color: #5b5960; line-height: 1.6; }
+.roster-workflow .field { display: grid; gap: 8px; margin: 18px 0; }
+.roster-workflow textarea { width: 100%; min-height: 115px; padding: 12px; resize: vertical; }
+.roster-preview { margin-top: 20px; }
+.roster-table { min-width: 430px; }
+.roster-table input { min-width: 0; width: 100%; padding: 8px; }
+.roster-preview > .btn { margin-top: 16px; }
+@media (max-width: 700px) { .mentor-content > .field, .roster-workflow { width: calc(100% - 28px); } .roster-workflow { margin-top: 14px; } }

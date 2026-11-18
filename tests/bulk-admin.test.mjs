@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { adminRoutes } from "../worker.js";
 
 const counselor = { id: 8, role: "counselor", department_id: 2 };
+const admin = { id: 1, role: "admin", department_id: null };
 const path = action => "/api/admin/" + action;
 const request = (action, data) => new Request("https://example.test" + path(action), {
   method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data)
@@ -74,14 +75,16 @@ test("批量审阅同步材料状态并发送结果通知", async () => {
   assert.match(batches[0][2].sql, /INSERT INTO notifications/);
 });
 
-test("批量邀请一次生成多个独立邀请码", async () => {
+test("管理员可批量生成辅导员邀请码，辅导员不可邀请", async () => {
   const { env, batches } = fakeEnv();
   const action = "invites";
-  const response = await adminRoutes(request(action, { departmentId: 2, role: "student", count: 3 }), env, path(action), counselor);
+  await assert.rejects(adminRoutes(request(action, { departmentId: 2, role: "counselor", count: 3 }), env, path(action), counselor), { status: 403 });
+  const response = await adminRoutes(request(action, { departmentId: 2, role: "counselor", count: 3 }), env, path(action), admin);
   const data = await response.json();
   assert.equal(data.codes.length, 3);
   assert.equal(new Set(data.codes).size, 3);
   assert.equal(batches[0].length, 3);
+  await assert.rejects(adminRoutes(request(action, { departmentId: 2, role: "student" }), env, path(action), admin), { status: 400 });
 });
 
 test("批量删除清理关联数据与私有文件", async () => {

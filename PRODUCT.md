@@ -18,7 +18,7 @@ web
 
 ## Operating Context
 
-网站部署于 `joinccp.martinzhang.asia`，与 `martinzhang.asia` 博客分离。注册需要一次性邀请码。学生注册时填写姓名、学号和自己设定的初始密码；院系随邀请确定，专业等档案字段由辅导员填写。
+网站部署于 `joinccp.martinzhang.asia`，与 `martinzhang.asia` 博客分离。学生由所属院系辅导员在办公助理的「自动注册」工作流中批量建号，首次使用学号和 `cauc+学号` 登录并强制改密。一次性邀请码只用于辅导员注册；专业等档案字段由辅导员填写。
 
 ## Capabilities and Constraints
 

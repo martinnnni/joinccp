@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import officialForms from "../official-forms.json";
 import { extractReviewText } from "./file-text.js";
+import { extractRosterText, parseRosterText } from "./roster.js";
 
 const root = document.getElementById("app");
 const navigation = document.getElementById("navigation");
@@ -22,6 +23,54 @@ const make = (tag, props = {}, ...children) => {
   return node;
 };
 const mentorTitle = () => (me && me.role === "counselor") ? "办公助理" : "成长导师";
+const renderMarkdown = src => {
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const inline = s => {
+    s = esc(s);
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    s = s.replace(/\*\*\*([^*]+)\*\*\*/g, "<strong><em>$1</em></strong>");
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    return s;
+  };
+  const lines = String(src ?? "").split("\n");
+  let out = "";
+  let inCode = false, codeBuf = [];
+  let list = null, para = [];
+  const closeList = () => { if (list) { out += "</" + list + ">"; list = null; } };
+  const flushPara = () => { if (para.length) { out += "<p>" + para.map(inline).join("<br>") + "</p>"; para = []; } };
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      if (inCode) { out += "<pre><code>" + esc(codeBuf.join("\n")) + "</code></pre>"; codeBuf = []; inCode = false; }
+      else { inCode = true; codeBuf = []; closeList(); flushPara(); }
+      continue;
+    }
+    if (inCode) { codeBuf.push(line); continue; }
+    const ul = line.match(/^\s*[-*+]\s+(.*)/);
+    const ol = line.match(/^\s*\d+[.)]\s+(.*)/);
+    if (ul) {
+      flushPara();
+      if (list !== "ul") { closeList(); list = "ul"; out += "<ul>"; }
+      out += "<li>" + inline(ul[1]) + "</li>";
+      continue;
+    }
+    if (ol) {
+      flushPara();
+      if (list !== "ol") { closeList(); list = "ol"; out += "<ol>"; }
+      out += "<li>" + inline(ol[1]) + "</li>";
+      continue;
+    }
+    closeList();
+    if (/^\s*$/.test(line)) { flushPara(); continue; }
+    const hh = line.match(/^(#{1,6})\s+(.*)/);
+    if (hh) { flushPara(); out += "<h" + hh[1].length + ">" + inline(hh[2]) + "</h" + hh[1].length + ">"; continue; }
+    para.push(line);
+  }
+  closeList(); flushPara();
+  if (inCode) out += "<pre><code>" + esc(codeBuf.join("\n")) + "</code></pre>";
+  return out;
+};
 const h = text => make("h1", { className: "page-title", text });
 const p = text => make("p", { text });
 const panel = (...children) => make("section", { className: "panel" }, children);
@@ -76,7 +125,7 @@ function nav() {
   navigation.replaceChildren();
   if (me) navigation.append(make("span", { className: "nav-label", text: me.role === "student" ? "学生工作区" : "党务工作区" }));
   const active = location.hash.slice(1) || (me ? me.role === "student" ? "profile" : "admin" : "login");
-  const items = me ? (me.role === "student"
+  const items = me?.must_change_password ? [["password", "设置新密码"]] : me ? (me.role === "student"
     ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ["mentor", "成长导师"], ["notifications", "通知"]]
     : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"]])
     : (config?.initialized ? [] : [["bootstrap", "初始化"]]);
@@ -88,7 +137,7 @@ function nav() {
   }
   navigation.append(scroll);
   if (me) {
-    const logout = async () => { await post("/api/logout", {}); me = null; mentorHistory = []; navigate("login"); };
+    const logout = async () => { await post("/api/logout", {}); me = null; resetMentorPanel(); navigate("login"); };
     const profileMenu = make("details", { className: "nav-profile" },
       make("summary", { text: "个人资料", "aria-label": "个人资料菜单" }),
       make("div", { className: "nav-profile-menu" },
@@ -106,11 +155,14 @@ function render() {
   document.body.dataset.role = me?.role || "guest";
   const fabLabel = document.querySelector("#mentorFab .mentor-fab-label");
   if (fabLabel) fabLabel.textContent = mentorTitle();
+  const fab = document.getElementById("mentorFab");
+  if (fab) fab.style.display = me?.must_change_password ? "none" : "";
   document.querySelector(".brand").setAttribute("href", me ? me.role === "student" ? "#profile" : "#admin" : "#login");
   nav();
   const page = location.hash.slice(1) || (me ? me.role === "student" ? "profile" : "admin" : config?.initialized ? "login" : "bootstrap");
   document.body.dataset.page = page;
   if (!me) root.replaceChildren(page === "register" ? registration() : page === "bootstrap" && !config?.initialized ? bootstrap() : login());
+  else if (me.must_change_password) root.replaceChildren(passwordPage());
   else if (page === "password") root.replaceChildren(passwordPage());
   else if (page === "forms") root.replaceChildren(formsPage());
   else if (me.role === "student") root.replaceChildren(
@@ -124,7 +176,7 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
   const form = make("form", { className: "auth-form" },
     includeInvite ? null : field("学号或用户名", "username"),
     includeInvite ? registrationFields : null,
-    field(includeInvite ? "设置初始密码（至少 12 位）" : "密码（至少 12 位）", "password", "password"),
+    field(includeInvite ? "设置密码" : "密码", "password", "password"),
     includeInvite ? field("邀请码", "inviteCode") : null,
     includeBootstrap ? field("初始化令牌", "bootstrapToken") : null,
     make("button", { type: "submit", className: "btn", text: title })
@@ -134,28 +186,29 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
     const release = busy(form);
     try {
       const data = formData(form), username = (data.username || "").trim();
-      if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(username) || data.password.length < 12) throw new Error("请检查用户名格式和密码长度（用户名 3–40 位，密码至少 12 位）");
+      if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(username) || !data.password) throw new Error("请输入有效用户名和密码");
       const salt = includeInvite || includeBootstrap ? randomHex(16) : (await api("/api/auth/challenge?username=" + encodeURIComponent(username))).salt;
       const verifier = await derive(data.password, salt);
+      const initialPassword = !includeInvite && !includeBootstrap && data.password === "cauc+" + username ? data.password : undefined;
       delete data.password;
       const endpoint = includeBootstrap ? "/api/bootstrap" : includeInvite ? "/api/register" : "/api/login";
-      const result = await post(endpoint, { ...data, username, salt, verifier });
+      await post(endpoint, { ...data, username, salt, verifier, initialPassword });
       config = await api("/api/config");
       await refreshMe();
-      mentorHistory = [];
-      navigate(me?.role === "student" ? "profile" : "admin");
+      resetMentorPanel();
+      navigate(me?.must_change_password ? "password" : me?.role === "student" ? "profile" : "admin");
     } catch (error) { feedback(form, error.message); }
     finally { release(); }
   });
   const status = includeBootstrap ? "首次配置" : includeInvite ? "凭邀请码注册" : "受邀访问";
   const subtitle = includeBootstrap
     ? "仅首次部署时需要初始化令牌，完成后使用普通登录。"
-    : includeInvite ? "使用管理员提供的一次性邀请码创建账号（学生填学号，辅导员自定义用户名）。" : "使用你的账号继续查看培养进度与材料。";
+    : includeInvite ? "仅辅导员使用管理员提供的一次性邀请码注册。" : "学生首次登录：用户名为学号，初始密码为 cauc+学号；登录后须立即修改。";
   const card = panel(make("span", { className: "auth-status", text: status }), h(title), make("p", { className: "auth-help", text: subtitle }),
     form,
     includeBootstrap ? null : make("div", { className: "auth-switch" },
-      make("span", { text: includeInvite ? "已有账号？" : "收到了邀请码？" }),
-      button(includeInvite ? "返回登录" : "受邀注册", () => navigate(includeInvite ? "login" : "register"), "linklike")));
+      make("span", { text: includeInvite ? "已有账号？" : "辅导员收到了邀请码？" }),
+      button(includeInvite ? "返回登录" : "辅导员注册", () => navigate(includeInvite ? "login" : "register"), "linklike")));
   card.classList.add("auth-card");
   const story = make("div", { className: "auth-story" },
     make("div", { className: "orbit-field", "aria-hidden": "true" },
@@ -177,30 +230,35 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
   return make("div", { className: "auth-layout" }, story, card);
 }
 function login() { return accountForm("登录"); }
-function registration() { return accountForm("受邀注册", true); }
+function registration() { return accountForm("辅导员受邀注册", true); }
 function bootstrap() { return accountForm("初始化管理员", false, true); }
 
 function passwordPage() {
+  const firstLogin = !!me?.must_change_password;
   const form = make("form", { className: "auth-form" },
-    field("当前密码", "oldPassword", "password"),
-    field("新密码（至少 12 位）", "newPassword", "password"),
-    make("button", { type: "submit", className: "btn", text: "修改密码" }));
+    field(firstLogin ? "初始密码" : "当前密码", "oldPassword", "password"),
+    field("新密码", "newPassword", "password"),
+    field("再次输入新密码", "confirmPassword", "password"),
+    make("button", { type: "submit", className: "btn", text: firstLogin ? "设置新密码并继续" : "修改密码" }));
   form.addEventListener("submit", async event => {
     event.preventDefault();
     const release = busy(form);
     try {
       const values = formData(form);
-      if (values.newPassword.length < 12) throw new Error("新密码至少 12 位");
+      if (!values.newPassword || values.newPassword !== values.confirmPassword) throw new Error("请确认两次输入的新密码一致");
+      if (values.newPassword === values.oldPassword) throw new Error("新密码不能与当前密码相同");
       const challenge = await api("/api/auth/challenge?username=" + encodeURIComponent(me.username));
       const oldVerifier = await derive(values.oldPassword, challenge.salt);
       const newSalt = randomHex(16), newVerifier = await derive(values.newPassword, newSalt);
-      await post("/api/change-password", { oldVerifier, newVerifier, newSalt });
+      await post("/api/change-password", { oldVerifier, newVerifier, newSalt, ...(firstLogin ? { oldPassword: values.oldPassword, newPassword: values.newPassword } : {}) });
       form.reset();
-      feedback(form, "密码已更新，其他设备的登录已退出。", "success");
+      await refreshMe();
+      if (firstLogin) navigate(me?.role === "student" ? "profile" : "admin");
+      else feedback(form, "密码已更新，其他设备的登录已退出。", "success");
     } catch (error) { feedback(form, error.message); }
     finally { release(); }
   });
-  return make("div", { className: "view view-password" }, pageHead("ACCOUNT / SECURITY", "修改密码", "更新密码后，其他设备上的登录会自动退出。"),
+  return make("div", { className: "view view-password" }, pageHead("ACCOUNT / SECURITY", firstLogin ? "首次登录 · 设置新密码" : "修改密码", firstLogin ? "请先修改初始密码，完成后即可使用档案与成长导师。" : "更新密码后，其他设备上的登录会自动退出。"),
     panel(make("div", { className: "panel-head" }, make("h2", { text: "账号安全" })), form));
 }
 
@@ -244,7 +302,58 @@ function profilePage() {
 }
 
 function mentorGirl() {
+  for (let i = 1; i <= 7; i++) { const img = new Image(); img.src = "/girl/frame_" + i + ".webp"; }
   return make("img", { src: "/girl/frame_0.webp", alt: "", className: "mentor-girl-img", draggable: "false" });
+}
+
+function autoRegisterWorkflow() {
+  const file = field("上传入围名单（XLSX / CSV / TXT / DOCX / PDF）", "rosterFile", "file", false);
+  file.querySelector("input").accept = ".xlsx,.csv,.txt,.docx,.pdf";
+  const pasted = make("label", { className: "field" }, make("span", { text: "或粘贴名单文字" }),
+    make("textarea", { rows: "5", placeholder: "每行一位学生，例如：张三 123456789" }));
+  const output = make("div", { className: "roster-preview", "aria-live": "polite" });
+  const parse = button("识别名单", async () => {
+    parse.disabled = true;
+    output.replaceChildren(notice("正在读取并识别名单…"));
+    try {
+      const selected = file.querySelector("input").files?.[0];
+      const text = selected ? await extractRosterText(selected) : pasted.querySelector("textarea").value;
+      const result = parseRosterText(text);
+      if (!result.rows.length) throw new Error("未识别到姓名和学号，请检查名单格式或直接粘贴文字");
+      if (result.rows.length > 50) throw new Error("一次最多注册 50 人，请将名单拆分后上传");
+      const table = make("table", { className: "data roster-table" },
+        make("thead", {}, make("tr", {}, ["姓名", "学号", "操作"].map(label => make("th", { text: label })))),
+        make("tbody", {}, result.rows.map(row => make("tr", { className: "roster-row" },
+          make("td", {}, make("input", { className: "roster-name", value: row.name, "aria-label": "学生姓名" })),
+          make("td", {}, make("input", { className: "roster-number", value: row.studentNo, inputmode: "numeric", "aria-label": "学号" })),
+          make("td", {}, button("移除", event => event.currentTarget.closest("tr").remove(), "secondary"))))));
+      const confirm = button("确认名单并自动注册", async () => {
+        const students = Array.from(table.querySelectorAll(".roster-row"), tr => ({
+          name: tr.querySelector(".roster-name").value.trim(), studentNo: tr.querySelector(".roster-number").value.trim()
+        }));
+        if (!students.length) return output.prepend(notice("名单中没有学生", "error"));
+        if (!students.every(row => /^[\p{Script=Han}·]{2,20}$/u.test(row.name) && /^\d{6,20}$/.test(row.studentNo)) ||
+          new Set(students.map(row => row.studentNo)).size !== students.length) return output.prepend(notice("请修正姓名、学号或重复项后再确认", "error"));
+        if (!window.confirm("确认注册 " + students.length + " 名学生？他们首次用学号和 cauc+学号登录，并须立即改密。")) return;
+        confirm.disabled = true;
+        try {
+          const saved = await post("/api/admin/students/auto-register", { students });
+          output.replaceChildren(notice("已注册 " + saved.count + " 名学生。请通过可信渠道通知他们首次登录及改密。", "success"),
+            button("查看学生档案", () => { closeMentor(); navigate("admin"); }, "secondary"));
+          file.querySelector("input").value = "";
+          pasted.querySelector("textarea").value = "";
+        } catch (error) { output.prepend(notice(error.message, "error")); confirm.disabled = false; }
+      });
+      output.replaceChildren(make("p", { text: "请核对以下 " + result.rows.length + " 人。可直接修改或移除记录。" }),
+        ...(result.issues.length ? [notice("需核对：" + result.issues.slice(0, 5).join("；"), "error")] : []),
+        tableWrap(table), confirm);
+    } catch (error) { output.replaceChildren(notice(error.message, "error")); }
+    finally { parse.disabled = false; }
+  });
+  return make("section", { className: "roster-workflow", hidden: "" },
+    make("h2", { text: "自动注册" }),
+    make("p", { text: "上传或粘贴入围名单，先核对识别结果，再批量创建学生账号。原名单文件留在浏览器中，不会保存到网站。" }),
+    file, pasted, parse, output);
 }
 
 function mentorPage() {
@@ -252,8 +361,11 @@ function mentorPage() {
   (async () => { try {
     const status = await api("/api/mentor");
     const icon = (path, label) => { const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("width", "20"); svg.setAttribute("height", "20"); svg.setAttribute("fill", "none"); svg.setAttribute("stroke", "currentColor"); svg.setAttribute("stroke-width", "1.8"); svg.setAttribute("stroke-linecap", "round"); svg.setAttribute("stroke-linejoin", "round"); svg.setAttribute("aria-hidden", "true"); const p = document.createElementNS("http://www.w3.org/2000/svg", "path"); p.setAttribute("d", path); svg.append(p); return svg; };
-    const links = [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ["notifications", "通知中心"]];
-    const navLinks = () => links.map(([page, label]) => make("a", { href: "#" + page, text: label }));
+    const links = me?.role === "counselor" || me?.role === "admin"
+      ? [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"]]
+      : me?.role === "student" ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ["notifications", "通知中心"]]
+        : [["login", "登录"], ["register", "辅导员注册"]];
+    const navLinks = () => links.map(([page, label]) => make("a", { href: "#" + page, text: label, onclick: closeMentor }));
     const log = make("div", { className: "mentor-thread", role: "log", "aria-live": "polite", "aria-label": "成长导师对话" });
     const empty = make("div", { className: "mentor-empty" },
       make("span", { className: "mentor-kicker", text: (me && me.role === "counselor") ? "OFFICE ASSISTANT / 办公助理" : "GROWTH MENTOR / 成长导师" }),
@@ -268,7 +380,10 @@ function mentorPage() {
         make("strong", { text: (index + 1) + ". " + source.title + " · " + source.section }), make("p", { text: source.excerpt })))));
     const appendMessage = item => {
       const row = make("div", { className: "mentor-row " + item.role });
-      const body = make("div", { className: "mentor-bubble" }, make("div", { className: "mentor-message", text: item.content }));
+      const msg = make("div", { className: "mentor-message" });
+      if (item.role === "assistant") msg.innerHTML = renderMarkdown(item.content || "");
+      else msg.textContent = item.content || "";
+      const body = make("div", { className: "mentor-bubble" }, msg);
       if (item.sources?.length) body.append(sourceView(item.sources));
       row.append(body); log.append(row); return row;
     };
@@ -330,7 +445,15 @@ function mentorPage() {
         make("strong", { text: mentorTitle() }),
         make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })));
     const header = make("header", { className: "mentor-topbar" }, make("div", { className: "mentor-topbar-left" }, menu, newChat()));
-    const content = make("div", { className: "mentor-content" }, log, form);
+    const roster = me?.role === "counselor" ? autoRegisterWorkflow() : null;
+    const workflow = roster ? select("工作流", "mentorWorkflow", [["chat", "普通问答"], ["auto-register", "自动注册"]]) : null;
+    if (workflow) workflow.querySelector("select").addEventListener("change", event => {
+      const registering = event.target.value === "auto-register";
+      roster.hidden = !registering;
+      log.hidden = registering;
+      form.hidden = registering;
+    });
+    const content = make("div", { className: "mentor-content" }, workflow, roster, log, form);
     shell.replaceChildren(aside, make("section", { className: "mentor-main", "aria-label": "成长导师" }, hero, header, content));
     if (mentorHistory.length) for (const item of mentorHistory) appendMessage(item); else log.append(empty);
     const resize = () => { textarea.style.height = "auto"; textarea.style.height = Math.min(textarea.scrollHeight, 176) + "px"; };
@@ -364,6 +487,7 @@ function mentorPage() {
           const row = appendMessage({ role: "assistant", content: "", sources: result.sources });
           const msg = row.querySelector(".mentor-message");
           for (const ch of result.answer) { msg.textContent += ch; log.scrollTop = log.scrollHeight; await new Promise(r => setTimeout(r, 14)); }
+          msg.innerHTML = renderMarkdown(result.answer);
         } else {
           mentorHistory.push({ role: "user", content: displayQuestion });
           appendMessage({ role: "assistant", content: result.sources?.length ? "找到以下相关资料：" : "目前没有找到相关资料，请换个更具体的问法。", sources: result.sources });
@@ -392,6 +516,12 @@ function closeMentor() {
   if (panel) panel.hidden = true;
   mentorPanelOpen = false;
   if (fab) { fab.setAttribute("aria-expanded", "false"); fab.classList.remove("mentor-fab--open"); }
+}
+function resetMentorPanel() {
+  closeMentor();
+  mentorHistory = [];
+  const body = document.getElementById("mentorPanelBody");
+  if (body) { body.replaceChildren(); delete body.dataset.built; }
 }
 
 function notificationsPage() {
@@ -599,7 +729,7 @@ function adminPage() {
     let needsDepartment = me.role === "admin" && departmentChoices.length === 0;
     const inviteForm = make("form", { className: "inline-form" },
       needsDepartment ? field("新院系名称", "departmentName") : select("院系", "departmentId", departmentChoices, me.department_id || departmentChoices[0]?.[0]),
-      select("角色", "role", me.role === "admin" ? [["student", "学生"], ["counselor", "辅导员"]] : [["student", "学生"]]),
+      select("角色", "role", [["counselor", "辅导员"]]),
       field("邀请数量（1–50）", "count", "number", true, "1"),
       make("button", { className: "btn", type: "submit", text: needsDepartment ? "创建院系并生成邀请码" : "生成邀请码" }));
     const countInput = inviteForm.querySelector("[name=count]");
@@ -664,15 +794,14 @@ function adminPage() {
     const metrics = make("div", { className: "metric-grid" },
       metric("学生档案", String(data.students.length), "当前可管理的学生"),
       metric("院系", String(data.departments.length), "已配置院系"),
-      metric("有效邀请", String(data.invites.filter(x => !x.used_by && new Date(x.expires_at) > new Date()).length), "未使用的邀请码", true));
+      metric("有效邀请", String(data.invites.filter(x => x.role === "counselor" && !x.used_by && new Date(x.expires_at) > new Date()).length), "未使用的辅导员邀请码", true));
     shell.replaceChildren(pageHead("STAFF / CONTROL CENTER", "辅导员工作台", "管理培养进度、受邀账号与站内通知。"),
       metrics,
       ...(me.role === "admin" && !needsDepartment ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "院系设置" })), departmentForm)] : []),
-      panel(make("div", { className: "panel-head" }, make("h2", { text: "邀请新成员" })),
-        inviteForm, inviteOutput),
+      ...(me.role === "admin" ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "邀请辅导员" })), inviteForm, inviteOutput)] : []),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "学生档案" }), make("span", { className: "small", text: "共 " + data.students.length + " 人" })),
         data.students.length ? bulkTools : null,
-        data.students.length ? tableWrap(students) : make("div", { className: "empty-state" }, make("strong", { text: "尚无学生" }), "先创建院系与邀请码，再邀请学生注册。")));
+        data.students.length ? tableWrap(students) : make("div", { className: "empty-state" }, make("strong", { text: "尚无学生" }), "请辅导员打开办公助理，选择“自动注册”工作流上传入围名单。")));
   } catch (error) { shell.replaceChildren(pageHead("STAFF / CONTROL CENTER", "辅导员工作台"), notice(error.message, "error")); } })();
   return shell;
 }
