@@ -79,7 +79,7 @@ function nav() {
   const items = me ? (me.role === "student"
     ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ["mentor", "成长导师"], ["notifications", "通知"]]
     : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"]])
-    : (config?.initialized ? [["login", "登录"], ["register", "受邀注册"]] : [["bootstrap", "初始化"]]);
+    : (config?.initialized ? [] : [["bootstrap", "初始化"]]);
   for (const [page, label] of items) {
     const link = make("a", { href: "#" + page, text: label, className: active === page ? "active" : "" });
     if (page === "mentor") link.addEventListener("click", event => { event.preventDefault(); openMentor(); });
@@ -155,6 +155,13 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
       make("span", { text: includeInvite ? "已有账号？" : "收到了邀请码？" }),
       button(includeInvite ? "返回登录" : "受邀注册", () => navigate(includeInvite ? "login" : "register"), "linklike")));
   card.classList.add("auth-card");
+  const titleCta = (includeInvite || includeBootstrap) ? null
+    : make("a", { className: "register-cta", href: "#register", "aria-label": "受邀注册" },
+        "受邀注册", make("span", { "aria-hidden": "true", text: " →" }));
+  const scrollHint = make("div", { className: "scroll-hint", "aria-hidden": "true" },
+    make("span", { text: "下滑注册" }),
+    make("svg", { viewBox: "0 0 24 24", width: "16", height: "16", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round" },
+      make("path", { d: "M12 5v14 M6 13l6 6 6-6" })));
   const story = make("div", { className: "auth-story" },
     make("div", { className: "orbit-field", "aria-hidden": "true" },
       make("span", { className: "orbit-ring orbit-ring-one" }),
@@ -168,10 +175,13 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
       make("span", { className: "orbit-node orbit-node-five" })),
     make("div", { className: "auth-story-copy" },
       make("span", { className: "story-intro", text: "中国民航大学 / 培养流程" }),
-      make("h1", {}, "党员发展计划", make("br"), "辅助系统"),
+      make("div", { className: "auth-title-row" },
+        make("h1", {}, "党员发展计划", make("br"), "辅助系统"),
+        titleCta),
       p("在这里统一查看培养进度、材料清单和站内通知")),
     make("ol", { className: "stage-strip", "aria-label": "培养流程的五个阶段" },
-      ["申请入党", "积极分子培养", "发展对象考察", "接收预备党员", "培养考察与转正"].map(name => make("li", { text: name }))));
+      ["申请入党", "积极分子培养", "发展对象考察", "接收预备党员", "培养考察与转正"].map(name => make("li", { text: name }))),
+    scrollHint);
   return make("div", { className: "auth-layout" }, story, card);
 }
 function login() { return accountForm("登录"); }
