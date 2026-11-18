@@ -21,6 +21,7 @@ const make = (tag, props = {}, ...children) => {
   }
   return node;
 };
+const mentorTitle = () => (me && me.role === "counselor") ? "办公助理" : "成长导师";
 const h = text => make("h1", { className: "page-title", text });
 const p = text => make("p", { text });
 const panel = (...children) => make("section", { className: "panel" }, children);
@@ -76,17 +77,24 @@ function nav() {
   if (me) navigation.append(make("span", { className: "nav-label", text: me.role === "student" ? "学生工作区" : "党务工作区" }));
   const active = location.hash.slice(1) || (me ? me.role === "student" ? "profile" : "admin" : "login");
   const items = me ? (me.role === "student"
-    ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ["mentor", "成长导师"], ["notifications", "通知"], ["password", "修改密码"]]
-    : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"], ["password", "修改密码"]])
+    ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ["mentor", "成长导师"], ["notifications", "通知"]]
+    : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"]])
     : (config?.initialized ? [["login", "登录"], ["register", "受邀注册"]] : [["bootstrap", "初始化"]]);
   for (const [page, label] of items) {
     const link = make("a", { href: "#" + page, text: label, className: active === page ? "active" : "" });
     if (page === "mentor") link.addEventListener("click", event => { event.preventDefault(); openMentor(); });
     navigation.append(link);
   }
-  if (me) navigation.append(make("span", { className: "nav-account", text: me.name || me.username }), button("退出", async () => {
-    await post("/api/logout", {}); me = null; mentorHistory = []; navigate("login");
-  }, "linklike"));
+  if (me) {
+    const logout = async () => { await post("/api/logout", {}); me = null; mentorHistory = []; navigate("login"); };
+    const profileMenu = make("details", { className: "nav-profile" },
+      make("summary", { text: "个人资料", "aria-label": "个人资料菜单" }),
+      make("div", { className: "nav-profile-menu" },
+        make("div", { className: "nav-profile-name", text: me.name || me.username }),
+        make("a", { href: "#password", text: "修改密码" }),
+        button("登出", logout, "linklike")));
+    navigation.append(profileMenu);
+  }
 }
 async function refreshMe() {
   try { me = (await api("/api/me")).user; } catch { me = null; }
@@ -94,6 +102,8 @@ async function refreshMe() {
 function render() {
   document.body.dataset.surface = me ? "workspace" : "entry";
   document.body.dataset.role = me?.role || "guest";
+  const fabLabel = document.querySelector("#mentorFab span");
+  if (fabLabel) fabLabel.textContent = mentorTitle();
   document.querySelector(".brand").setAttribute("href", me ? me.role === "student" ? "#profile" : "#admin" : "#login");
   nav();
   const page = location.hash.slice(1) || (me ? me.role === "student" ? "profile" : "admin" : config?.initialized ? "login" : "bootstrap");
@@ -108,7 +118,7 @@ function render() {
 function accountForm(title, includeInvite = false, includeBootstrap = false) {
   const registrationFields = includeInvite ? make("div", { className: "form-grid" },
     field("姓名", "name"),
-    field("学号（学生必填）", "studentNo", "text", false)) : null;
+    field("用户名 / 学号", "username", "text")) : null;
   const form = make("form", { className: "auth-form" },
     includeInvite ? null : field("学号或用户名", "username"),
     includeInvite ? registrationFields : null,
@@ -121,14 +131,13 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
     event.preventDefault();
     const release = busy(form);
     try {
-      const data = formData(form), username = includeInvite ? (data.studentNo || "").trim() : data.username.trim();
-      if (((!includeInvite || username) && !/^[a-zA-Z0-9_.-]{3,40}$/.test(username)) || data.password.length < 12) throw new Error("请检查学号或用户名格式和密码长度");
+      const data = formData(form), username = (data.username || "").trim();
+      if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(username) || data.password.length < 12) throw new Error("请检查用户名格式和密码长度（用户名 3–40 位，密码至少 12 位）");
       const salt = includeInvite || includeBootstrap ? randomHex(16) : (await api("/api/auth/challenge?username=" + encodeURIComponent(username))).salt;
       const verifier = await derive(data.password, salt);
       delete data.password;
       const endpoint = includeBootstrap ? "/api/bootstrap" : includeInvite ? "/api/register" : "/api/login";
       const result = await post(endpoint, { ...data, username, salt, verifier });
-      if (includeInvite && result.username && result.username !== username) window.alert("辅导员登录用户名：" + result.username + "。请保存此用户名，后续登录需要使用。 ");
       config = await api("/api/config");
       await refreshMe();
       mentorHistory = [];
@@ -139,7 +148,7 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
   const status = includeBootstrap ? "首次配置" : includeInvite ? "凭邀请码注册" : "受邀访问";
   const subtitle = includeBootstrap
     ? "仅首次部署时需要初始化令牌，完成后使用普通登录。"
-    : includeInvite ? "使用管理员提供的一次性邀请码创建账号。" : "使用你的账号继续查看培养进度与材料。";
+    : includeInvite ? "使用管理员提供的一次性邀请码创建账号（学生填学号，辅导员自定义用户名）。" : "使用你的账号继续查看培养进度与材料。";
   const card = panel(make("span", { className: "auth-status", text: status }), h(title), make("p", { className: "auth-help", text: subtitle }),
     form,
     includeBootstrap ? null : make("div", { className: "auth-switch" },
@@ -242,7 +251,7 @@ function mentorPage() {
     const log = make("div", { className: "mentor-thread", role: "log", "aria-live": "polite", "aria-label": "成长导师对话" });
     const empty = make("div", { className: "mentor-empty" },
       make("div", { className: "mentor-empty-mark", "aria-hidden": "true", text: "✳" }),
-      make("span", { className: "mentor-kicker", text: "GROWTH MENTOR / 成长导师" }),
+      make("span", { className: "mentor-kicker", text: (me && me.role === "counselor") ? "OFFICE ASSISTANT / 办公助理" : "GROWTH MENTOR / 成长导师" }),
       make("h1", { text: "今天想了解什么？" }),
       make("p", { text: "从培养流程到写作思路，直接说出你的问题。" }));
     const prompts = make("div", { className: "mentor-prompts" },
@@ -289,7 +298,7 @@ function mentorPage() {
       make("div", { className: "mentor-sidebar-bottom" }, make("span", { text: "当前会话" }), make("strong", { text: me?.name || me?.username || "学生" })));
     const menu = make("details", { className: "mentor-mobile-menu" }, make("summary", { "aria-label": "打开工作区菜单" }, icon("M4 7h16 M4 12h16 M4 17h16", "菜单")), make("nav", { "aria-label": "学生工作区" }, navLinks()));
     const header = make("header", { className: "mentor-topbar" }, menu,
-      make("div", { className: "mentor-topbar-title" }, make("strong", { text: "成长导师" }), make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })), newChat());
+      make("div", { className: "mentor-topbar-title" }, make("strong", { text: mentorTitle() }), make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })), newChat());
     const content = make("div", { className: "mentor-content" }, log, form);
     shell.replaceChildren(aside, make("section", { className: "mentor-main", "aria-label": "成长导师" }, header, content));
     if (mentorHistory.length) for (const item of mentorHistory) appendMessage(item); else log.append(empty);

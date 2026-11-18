@@ -1,0 +1,1 @@
+CREATE TABLE guest_usage (device_key TEXT PRIMARY KEY, day TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0);

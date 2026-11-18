@@ -12,9 +12,9 @@ export function isSiteHelpQuestion(question) {
   return siteWords.test(value) && helpWords.test(value);
 }
 
-// 用户身份问法（"我是谁 / 我叫什么 / 我的姓名"）——与机器人身份 isIdentityQuestion 区分开。
-const selfIdentityPattern = /我是谁|我叫(?:什么|啥|啥名|什么名|什么名字)|我的(?:名字|姓名|学号|身份)|我(?:到底|究竟)?是谁|我是(?:哪个|谁|哪一位)/;
-const selfIdentityPatternEn = /who am i|what(?:'s| is) my (?:name|id|student number|number|identity)|what am i called|do you know who i am/i;
+// 用户身份问法（"我是谁 / 谁是我 / 我叫什么 / 我的姓名"）——与机器人身份 isIdentityQuestion 区分开。
+const selfIdentityPattern = /我是谁|谁是我|我叫(?:什么|啥|啥名|什么名|什么名字|啥名字)|我的(?:名字|姓名|学号|身份|信息|资料)|我(?:到底|究竟)?是谁|我是(?:哪个|谁|哪一位|什么人)/;
+const selfIdentityPatternEn = /who am i|who i am|what(?:'s| is) my (?:name|id|student number|number|identity|info)|what am i called|tell me who i am|do you know who i am|who is me/i;
 export function isSelfIdentityQuestion(question) {
   return selfIdentityPattern.test(String(question)) || selfIdentityPatternEn.test(String(question));
 }

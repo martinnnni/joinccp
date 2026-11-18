@@ -147,6 +147,52 @@ h2 { font-size: 24px; line-height: 1.3; }
   font-size: 13px;
   white-space: nowrap;
 }
+.nav-profile { position: relative; }
+.nav-profile summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 8px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+  white-space: nowrap;
+}
+.nav-profile summary::-webkit-details-marker { display: none; }
+.nav-profile summary::after { content: '▾'; margin-left: 6px; font-size: 10px; }
+.nav-profile[open] summary { color: var(--ink); }
+.nav-profile-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 50;
+  min-width: 176px;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+}
+.nav-profile-name { padding: 8px 12px 9px; margin-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.nav-profile-menu a, .nav-profile-menu .linklike {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  padding: 9px 12px;
+  border: 0;
+  background: none;
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  text-decoration: none;
+}
+.nav-profile-menu a:hover, .nav-profile-menu .linklike:hover { background: var(--soft); color: var(--accent); }
 
 /* ---------- 主区 / 页脚 ---------- */
 .main { min-height: calc(100dvh - 158px); padding-block: 64px 96px; }
@@ -616,8 +662,8 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
   .auth-story-copy p { max-width: 27ch; font-size: 15px; }
   .auth-story::after { background-position: 68% center; }
   .auth-story::before { background: linear-gradient(90deg, rgba(247,249,248,.95), rgba(247,249,248,.80) 58%, rgba(247,249,248,.60)); }
-  .stage-strip { min-width: 540px; overflow-x: auto; padding-bottom: 8px; }
-  .stage-strip li { flex: 0 0 auto; min-width: 100px; font-size: 12px; padding-inline: 6px; }
+  .stage-strip { padding-bottom: 0; }
+  .stage-strip li { flex: 1 1 0; min-width: 0; font-size: 11px; padding-inline: 4px; }
   .auth-layout .auth-card { padding: 28px 20px 32px; }
   .auth-card .page-title { font-size: 30px; }
   .auth-form, body[data-page=register] .auth-form, body[data-page=bootstrap] .auth-form { grid-template-columns: minmax(0, 1fr); gap: 12px; }

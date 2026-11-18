@@ -40,8 +40,8 @@
   right: 22px;
   bottom: 84px;
   z-index: 55;
-  width: min(400px, calc(100vw - 32px));
-  height: min(620px, calc(100dvh - 120px));
+  width: min(480px, calc(100vw - 32px));
+  height: min(640px, calc(100dvh - 120px));
   display: flex;
   flex-direction: column;
   overflow: hidden;

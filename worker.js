@@ -43,10 +43,13 @@ function selectedIds(value, limit = 20) {
 function validName(value) { return /^[a-zA-Z0-9_.-]{3,40}$/.test(value); }
 function validHex(value, length) { return new RegExp("^[a-f0-9]{" + length + "}$").test(value); }
 function sessionCookie(request) { return /(?:^|; )session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.get("cookie") || "")?.[1] || ""; }
+const GUEST_DAILY_LIMIT = 20;
+const beijingDay = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+function deviceCookie(request) { return /(?:^|; )device=([a-f0-9]{32})(?:;|$)/.exec(request.headers.get("cookie") || "")?.[1] || ""; }
 async function currentUser(request, env) {
   const token = sessionCookie(request);
   if (!token) return null;
-  return env.DB.prepare("SELECT u.id,u.username,u.role,u.department_id,p.name,p.student_no,p.major,p.grade,p.phone,p.applied_at,p.current_stage_slug,p.current_node_slug,p.node_entered_at,p.is_graduate FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN profiles p ON p.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?")
+  return env.DB.prepare("SELECT u.id,u.username,u.role,u.department_id,COALESCE(NULLIF(u.name,''),p.name) AS name,p.student_no,p.major,p.grade,p.phone,p.applied_at,p.current_stage_slug,p.current_node_slug,p.node_entered_at,p.is_graduate FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN profiles p ON p.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?")
     .bind(await sha256(token), iso()).first();
 }
 const bodyJson = request => request.json().catch(() => ({}));
@@ -92,7 +95,8 @@ async function authRoutes(request, env, path) {
   if (path === "/api/config" && request.method === "GET") {
     const count = await env.DB.prepare("SELECT count(*) AS n FROM users").first();
     const departments = await env.DB.prepare("SELECT id,name FROM departments ORDER BY name").all();
-    return json({ ok: true, initialized: count.n > 0, departments: departments.results, aiEnabled: !!env.DEEPSEEK_API_KEY });
+    const headers = deviceCookie(request) ? {} : { "set-cookie": "device=" + randomHex(16) + "; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000" };
+    return json({ ok: true, initialized: count.n > 0, departments: departments.results, aiEnabled: !!env.DEEPSEEK_API_KEY }, 200, headers);
   }
   if (path === "/api/auth/challenge" && request.method === "GET") {
     requireSecret(env);
@@ -124,16 +128,16 @@ async function authRoutes(request, env, path) {
     const invite = await env.DB.prepare("SELECT * FROM invites WHERE code_hash=? AND used_by IS NULL AND expires_at>?")
       .bind(await sha256(code), iso()).first();
     assert(invite, "邀请码无效或已过期", 403);
-    const name = clean(data.name, 50), studentNo = clean(data.studentNo, 30);
-    if (invite.role === "student") assert(name && studentNo, "请填写姓名和学号");
-    else assert(name, "请填写姓名");
-    const username = invite.role === "student" ? studentNo : "staff-" + randomHex(6);
-    assert(validName(username), "学号只能包含字母、数字、点、横线或下划线，长度为 3 至 40 位");
+    const name = clean(data.name, 50);
+    const username = clean(data.username, 40);
+    assert(name, "请填写姓名");
+    assert(validName(username), "用户名只能包含字母、数字、点、横线或下划线，长度为 3 至 40 位");
+    const studentNo = invite.role === "student" ? username : "";
     const verifier = await hmac(env.AUTH_PEPPER, username.toLowerCase() + ":" + data.verifier);
     let userId = null;
     try {
-      const result = await env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id) VALUES(?,?,?,?,?)")
-        .bind(username, data.salt, verifier, invite.role, invite.department_id).run();
+      const result = await env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name) VALUES(?,?,?,?,?,?)")
+        .bind(username, data.salt, verifier, invite.role, invite.department_id, name).run();
       userId = result.meta.last_row_id;
       if (invite.role === "student") await env.DB.prepare("INSERT INTO profiles(user_id,name,student_no,major,grade,phone,applied_at,node_entered_at) VALUES(?,?,?,?,?,?,?,?)")
         .bind(userId, name, studentNo, "", "", "", null, iso().slice(0, 10)).run();
@@ -142,7 +146,7 @@ async function authRoutes(request, env, path) {
       return json({ ok: true, username }, 201, { "set-cookie": await startSession(env, userId) });
     } catch (error) {
       if (userId) await env.DB.prepare("DELETE FROM users WHERE id=?").bind(userId).run();
-      if (String(error).includes("UNIQUE")) throw new HttpError(409, "用户名或学号已存在");
+      if (String(error).includes("UNIQUE")) throw new HttpError(409, "用户名已存在");
       throw error;
     }
   }
@@ -236,7 +240,7 @@ async function logMentorQuestion(env, user, question, decision) {
 }
 async function mentorMatches(env, user, question, previousQuestion) {
   const shared = retrieve(question, { stageSlug: user?.current_stage_slug, previousQuestion });
-  if (!user || !isPersonalQuestion(question)) return shared;
+  if (!user || user.role !== "student" || !isPersonalQuestion(question)) return shared;
   const records = await env.DB.prepare("SELECT m.name,m.stage_slug,s.name AS stage_name,r.status,r.r2_key FROM materials m JOIN stages s ON s.slug=m.stage_slug LEFT JOIN material_records r ON r.material_id=m.id AND r.student_id=? ORDER BY s.position,m.id")
     .bind(user.id).all();
   const node = await env.DB.prepare("SELECT name FROM nodes WHERE slug=?").bind(user.current_node_slug).first();
@@ -244,13 +248,14 @@ async function mentorMatches(env, user, question, previousQuestion) {
 }
 export async function mentorRoutes(request, env, path, user) {
   if (!path.startsWith("/api/mentor")) return null;
-  if (user && user.role !== "student") assert(false, "仅学生可使用成长导师", 403);
+  if (user && user.role !== "student" && user.role !== "counselor") assert(false, "仅学生和辅导员可使用成长导师", 403);
   const enabled = !!env.DEEPSEEK_API_KEY;
   if (path === "/api/mentor" && request.method === "GET") {
     return json({ ok: true, enabled, knowledgeCount, message: enabled ? "成长导师已启用" : "知识库检索已就绪，AI 回答等待配置 API Key" });
   }
   if (path === "/api/mentor/review" && request.method === "POST") {
     assert(user, "请先登录", 401);
+    assert(user.role === "student", "仅学生可使用文件检查", 403);
     assert(enabled, "成长导师尚未启用，请先配置 DeepSeek API Key", 503);
     const data = await bodyJson(request);
     const filename = clean(data.filename, 150);
@@ -273,6 +278,15 @@ export async function mentorRoutes(request, env, path, user) {
   if ((path === "/api/mentor/retrieve" || path === "/api/mentor/chat") && request.method === "POST") {
     const data = await bodyJson(request), question = clean(data.question, 500);
     assert(question.length >= 2, "请输入至少两个字的问题");
+    if (!user) {
+      let key = deviceCookie(request);
+      if (!key) key = await sha256("ip:" + (request.headers.get("CF-Connecting-IP") || "local"));
+      const today = beijingDay();
+      const row = await env.DB.prepare("SELECT count, day FROM guest_usage WHERE device_key=?").bind(key).first();
+      const used = row && row.day === today ? row.count : 0;
+      if (used >= GUEST_DAILY_LIMIT) return json({ ok: false, error: "您已超出限额，请登录后继续使用", limitExceeded: true }, 429);
+      await env.DB.prepare("INSERT INTO guest_usage(device_key,day,count) VALUES(?,?,1) ON CONFLICT(device_key) DO UPDATE SET day=excluded.day, count=CASE WHEN guest_usage.day=excluded.day THEN guest_usage.count+1 ELSE 1 END").bind(key, today).run();
+    }
     const history = Array.isArray(data.history) ? data.history.slice(-6) : [];
     const previousQuestion = history.filter(item => item?.role === "user").at(-1)?.content || "";
     if (path === "/api/mentor/retrieve") {
@@ -289,14 +303,22 @@ export async function mentorRoutes(request, env, path, user) {
       await logMentorQuestion(env, user, question, decision);
       const en = !isChineseQuestion(question);
       if (!user) return json({ ok: true, answer: en ? "I don't know. Log in and I can tell you." : "不知道。登录后我才能告诉你。", sources: [], route: "identity", intent: "business" });
-      const [dept, stage, node] = await Promise.all([
-        env.DB.prepare("SELECT name FROM departments WHERE id=?").bind(user.department_id).first(),
-        env.DB.prepare("SELECT name FROM stages WHERE slug=?").bind(user.current_stage_slug).first(),
-        env.DB.prepare("SELECT name FROM nodes WHERE slug=?").bind(user.current_node_slug).first()
-      ]);
-      const answer = en
-        ? "You are " + (user.name || "—") + ", student number " + (user.student_no || "—") + ", " + (dept?.name || "department unset") + ", currently at the \u201c" + (stage?.name || "unset") + "\u201d stage, node \u201c" + (node?.name || "unset") + "\u201d. Contact your counselor if anything is wrong."
-        : "你是" + (user.name || "未填") + "，学号 " + (user.student_no || "未填") + "，" + (dept?.name || "院系未填") + "，当前处于「" + (stage?.name || "未设置") + "」阶段，节点「" + (node?.name || "未设置") + "」。如信息有误，请联系辅导员。";
+      const dept = await env.DB.prepare("SELECT name FROM departments WHERE id=?").bind(user.department_id).first();
+      let answer;
+      if (user.role === "student") {
+        const [stage, node] = await Promise.all([
+          env.DB.prepare("SELECT name FROM stages WHERE slug=?").bind(user.current_stage_slug).first(),
+          env.DB.prepare("SELECT name FROM nodes WHERE slug=?").bind(user.current_node_slug).first()
+        ]);
+        answer = en
+          ? "You are " + (user.name || "—") + ", student number " + (user.student_no || "—") + ", " + (dept?.name || "department unset") + ", currently at the \u201c" + (stage?.name || "unset") + "\u201d stage, node \u201c" + (node?.name || "unset") + "\u201d. Contact your counselor if anything is wrong."
+          : "你是" + (user.name || "未填") + "，学号 " + (user.student_no || "未填") + "，" + (dept?.name || "院系未填") + "，当前处于「" + (stage?.name || "未设置") + "」阶段，节点「" + (node?.name || "未设置") + "」。如信息有误，请联系辅导员。";
+      } else {
+        const roleName = user.role === "admin" ? "管理员" : "辅导员";
+        answer = en
+          ? "You are " + (user.name || user.username) + " (" + (user.role === "admin" ? "administrator" : "counselor") + "), " + (dept?.name || "—") + "."
+          : "你是" + (user.name || user.username) + "，用户名 " + user.username + "，角色：" + roleName + "，" + (dept?.name || "院系未填") + "。";
+      }
       return json({ ok: true, answer, sources: [], route: "identity", intent: "business" });
     }
     assert(enabled, "成长导师尚未启用，请先配置 DeepSeek API Key", 503);
