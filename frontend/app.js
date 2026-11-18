@@ -254,7 +254,6 @@ function mentorPage() {
     const navLinks = () => links.map(([page, label]) => make("a", { href: "#" + page, text: label }));
     const log = make("div", { className: "mentor-thread", role: "log", "aria-live": "polite", "aria-label": "成长导师对话" });
     const empty = make("div", { className: "mentor-empty" },
-      make("div", { className: "mentor-empty-mark", "aria-hidden": "true", text: "✳" }),
       make("span", { className: "mentor-kicker", text: (me && me.role === "counselor") ? "OFFICE ASSISTANT / 办公助理" : "GROWTH MENTOR / 成长导师" }),
       make("h1", { text: "今天想了解什么？" }),
       make("p", { text: "从培养流程到写作思路，直接说出你的问题。" }));

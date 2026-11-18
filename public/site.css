@@ -652,7 +652,7 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
 }
 
 @media (max-width: 850px) {
-  .header-inner { display: block; min-height: 0; padding-block: 14px 0; }
+  .header-inner { display: block; min-height: 0; padding-block: 16px 12px; }
   .school-wordmark { width: 197px; }
   .nav { justify-content: flex-start; flex-wrap: wrap; gap: 12px 24px; width: 100%; overflow: visible; }
   .nav a, .nav .linklike { padding-block: 11px; }
@@ -677,15 +677,16 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
   :root { --page-gutter: 20px; }
   .container { width: min(100% - 40px, 1370px); }
   .header-inner { width: min(100% - 40px, 1370px); }
+  .brand { justify-content: center; }
   .school-wordmark { width: 184px; }
   .nav { gap: 20px; }
   .nav a, .nav .linklike { font-size: 14px; }
   .auth-layout { display: block; min-height: 0; }
-  .auth-story { min-height: min(66svh, 500px); padding: 28px 20px 20px; }
-  .auth-story-copy { width: 100%; margin: 0 0 24px; }
-  .auth-story h1 { font-size: clamp(34px, 9.6vw, 48px); line-height: 1.14; }
-  .story-intro { margin-bottom: 14px; padding-bottom: 8px; }
-  .auth-story-copy p { max-width: 100%; font-size: 15px; line-height: 1.6; }
+  .auth-story { min-height: min(66svh, 500px); padding: 32px 20px 24px; }
+  .auth-story-copy { width: 100%; margin: 0 0 28px; text-align: center; }
+  .auth-story h1 { font-size: clamp(40px, 11.5vw, 54px); line-height: 1.12; }
+  .story-intro { margin-bottom: 16px; padding-bottom: 8px; font-size: 14px; }
+  .auth-story-copy p { max-width: 100%; font-size: 16px; line-height: 1.6; }
   .auth-story::after { background-position: 68% center; }
   .auth-story::before { background: linear-gradient(90deg, rgba(247,249,248,.94), rgba(247,249,248,.80) 58%, rgba(247,249,248,.56)); }
   .stage-strip { padding: 14px 0 0; }

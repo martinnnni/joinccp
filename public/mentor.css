@@ -55,8 +55,8 @@
   right: 22px;
   bottom: 84px;
   z-index: 55;
-  width: min(600px, calc(100vw - 32px));
-  height: min(760px, calc(100dvh - 120px));
+  width: min(700px, calc(100vw - 32px));
+  height: min(820px, calc(100dvh - 110px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -181,19 +181,19 @@
 /* ---------- 顶部像素小人 + 雾感标题框 ---------- */
 .mentor-hero {
   position: absolute;
-  top: 18px;
+  top: 20px;
   left: 0;
   right: 0;
   z-index: 4;
-  height: 150px;
+  height: 180px;
   pointer-events: none;
 }
 .mentor-girl {
   position: absolute;
   top: 0;
   left: 50%;
-  width: 100px;
-  height: 106px;
+  width: 126px;
+  height: 134px;
   transform: translateX(-50%);
   z-index: 5;
   transition: transform .3s ease;
@@ -201,7 +201,7 @@
 .mentor-girl-img { display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; user-select: none; -webkit-user-drag: none; pointer-events: none; }
 .mentor-titlebox {
   position: absolute;
-  top: 90px;
+  top: 112px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 4;
@@ -209,17 +209,17 @@
   flex-direction: column;
   align-items: center;
   gap: 1px;
-  min-width: 214px;
-  padding: 18px 30px 12px;
+  min-width: 250px;
+  padding: 20px 34px 14px;
   border: 1px solid rgba(255, 255, 255, .6);
   border-radius: 14px;
-  background: rgba(255, 255, 255, .40);
+  background: rgba(255, 255, 255, .22);
   backdrop-filter: blur(10px) saturate(1.15);
   -webkit-backdrop-filter: blur(10px) saturate(1.15);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.75), 0 6px 22px rgba(28, 21, 23, .08);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.7), 0 12px 36px rgba(28, 21, 23, .26);
 }
-.mentor-titlebox strong { font-size: 15px; font-weight: 700; color: var(--mentor-ink); }
-.mentor-titlebox span { font-size: 11px; color: var(--mentor-muted); letter-spacing: .02em; }
+.mentor-titlebox strong { font-size: 17px; font-weight: 700; color: var(--mentor-ink); white-space: nowrap; }
+.mentor-titlebox span { font-size: 13px; color: var(--mentor-muted); letter-spacing: .02em; white-space: nowrap; }
 .think-dots {
   position: absolute;
   top: 6px;
@@ -248,11 +248,10 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   width: 100%;
-  padding: 172px max(24px, calc((100% - 780px)/2)) 18px;
+  padding: 210px max(24px, calc((100% - 780px)/2)) 18px;
   scrollbar-color: #ded5d6 transparent;
 }
 .mentor-empty { display: flex; flex-direction: column; justify-content: center; min-height: 100%; padding: 0 0 6vh; }
-.mentor-empty-mark { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin-bottom: 26px; border: 1px solid #f0dedf; border-radius: 13px; color: var(--accent, #a51f2d); font-size: 23px; line-height: 1; }
 .mentor-kicker { margin-bottom: 14px; color: var(--accent, #a51f2d); font: 11px var(--mono); letter-spacing: .1em; }
 .mentor-empty h1 { margin: 0 0 11px; font: 600 clamp(30px, 3.1vw, 46px)/1.2 var(--display); letter-spacing: -.04em; }
 .mentor-empty > p { margin: 0 0 40px; color: var(--mentor-muted); font-size: 14px; }
@@ -354,9 +353,8 @@
   .mentor-mobile-menu nav { position: absolute; z-index: 20; top: 43px; left: -6px; display: grid; min-width: 180px; padding: 8px; border: 1px solid var(--mentor-line); border-radius: 10px; background: #fff; box-shadow: 0 14px 36px rgba(0,0,0,.1); }
   .mentor-mobile-menu nav a { padding: 9px 11px; border-radius: 6px; color: var(--mentor-ink); font-size: 13px; text-decoration: none; }
   .mentor-mobile-menu nav a:hover { background: #f6f0f1; }
-  .mentor-thread { padding: 168px 18px 8px; }
+  .mentor-thread { padding: 200px 18px 8px; }
   .mentor-empty { justify-content: center; padding-bottom: 4vh; }
-  .mentor-empty-mark { margin-bottom: 22px; }
   .mentor-empty h1 { font-size: clamp(30px, 8vw, 39px); }
   .mentor-empty > p { margin-bottom: 30px; }
   .mentor-prompts { grid-template-columns: 1fr; }
