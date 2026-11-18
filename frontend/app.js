@@ -169,7 +169,7 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
     make("div", { className: "auth-story-copy" },
       make("span", { className: "story-intro", text: "中国民航大学 / 培养流程" }),
       make("h1", {}, "党员发展计划", make("br"), "辅助系统"),
-      p("培养进度、材料清单和站内通知，在同一处查看。")),
+      p("在这里统一查看培养进度、材料清单和站内通知")),
     make("ol", { className: "stage-strip", "aria-label": "培养流程的五个阶段" },
       ["申请入党", "积极分子培养", "发展对象考察", "接收预备党员", "培养考察与转正"].map(name => make("li", { text: name }))));
   return make("div", { className: "auth-layout" }, story, card);

@@ -55,6 +55,8 @@
   /* 间距阶梯 */
   --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px;
   --s-5: 24px; --s-6: 32px; --s-7: 48px; --s-8: 64px;
+  /* 页面内容左缩进：与顶栏 .container 的左边缘一致（超宽屏时随容器居中而增大） */
+  --page-gutter: max(3.6vw, calc((100% - 1370px) / 2));
 
   /* 圆角阶梯（soft） */
   --r-sm: 8px;
@@ -225,7 +227,7 @@ body[data-surface=entry] .main { width: 100%; padding: 0; }
   justify-content: space-between;
   overflow: hidden;
   min-height: 560px;
-  padding: 48px max(3.6vw, 32px) 32px;
+  padding: 48px var(--page-gutter) 32px;
   color: var(--ink);
 }
 /* 校园照片作克制的底图，一层干净的光幕保证可读性 */
@@ -338,7 +340,7 @@ body[data-surface=entry] .main { width: 100%; padding: 0; }
 }
 .auth-status { grid-column: 1; grid-row: 1; color: var(--accent); font: 13px var(--mono); letter-spacing: .06em; }
 /* 覆盖 .panel 的 padding（同优先级、靠后），保持登录卡左右内边距 */
-.auth-layout .auth-card { padding: 28px max(3.6vw, 32px) 32px; }
+.auth-layout .auth-card { padding: 28px var(--page-gutter) 32px; }
 .auth-card .page-title { grid-column: 1; grid-row: 2; margin: 8px 0 6px; font-size: clamp(30px, 2.7vw, 40px); }
 .auth-help { grid-column: 1; grid-row: 3; color: var(--muted); font-size: 14px; line-height: 1.55; }
 .auth-switch { grid-column: 1; grid-row: 4; display: flex; align-items: center; gap: 7px; margin-top: 6px; color: var(--muted); font-size: 14px; }
@@ -650,6 +652,7 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
 }
 
 @media (max-width: 640px) {
+  :root { --page-gutter: 20px; }
   .container { width: min(100% - 40px, 1370px); }
   .header-inner { width: min(100% - 40px, 1370px); }
   .school-wordmark { width: 184px; }
