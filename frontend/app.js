@@ -483,13 +483,14 @@ function checkPage() {
   (async () => { try {
     const data = await api("/api/materials");
     const materialChoices = data.materials.map(x => [x.id, x.name]);
-    const form = make("form", { className: "auth-form" },
+    const form = make("form", { className: "check-form" },
       select("选择材料", "materialId", materialChoices),
-      make("div", { className: "upload-zone" },
-        field("材料文件", "docx", "file"),
-        make("span", { className: "small", text: "仅支持 DOCX · 文件最大 10 MB · 上传后存入私有空间" })),
+      make("label", { className: "upload-drop" },
+        make("span", { className: "upload-drop-icon", "aria-hidden": "true", text: "↑" }),
+        make("strong", { text: "选择 DOCX 文件" }),
+        make("span", { className: "small", text: "点击选择 · 仅 DOCX · 最大 10 MB · 上传后存入私有空间" }),
+        make("input", { name: "docx", type: "file", accept: ".docx", required: "", "aria-label": "材料文件" })),
       make("button", { className: "btn", type: "submit", text: "检查并提交" }));
-    form.querySelector("[name=docx]").setAttribute("accept", ".docx");
     const output = panel(make("div", { className: "panel-head" }, make("h2", { text: "质检结果" })),
       make("div", { className: "empty-state" }, make("strong", { text: "等待检查" }), "选择材料并上传 DOCX，结果将在这里显示。"));
     form.addEventListener("submit", async event => {
