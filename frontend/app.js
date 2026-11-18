@@ -307,6 +307,23 @@ function mentorPage() {
       make("div", { className: "mentor-sidebar-bottom" }, make("span", { text: "当前会话" }), make("strong", { text: me?.name || me?.username || "学生" })));
     const menu = make("details", { className: "mentor-mobile-menu" }, make("summary", { "aria-label": "打开工作区菜单" }, icon("M4 7h16 M4 12h16 M4 17h16", "菜单")), make("nav", { "aria-label": "学生工作区" }, navLinks()));
     const girlImg = mentorGirl();
+    let girlTimers = [];
+    const setGirlFrame = n => { girlImg.src = "/girl/frame_" + n + ".webp"; };
+    const clearGirlTimers = () => { girlTimers.forEach(clearTimeout); girlTimers = []; };
+    const playGirlTyping = () => {
+      clearGirlTimers();
+      let i = 1;
+      const introDurs = [320, 300, 260, 240];
+      const step = () => {
+        if (i <= 4) { setGirlFrame(i); girlTimers.push(setTimeout(step, introDurs[i - 1])); i++; }
+        else { let t = 0; const loop = () => { setGirlFrame(5 + (t % 3)); t++; girlTimers.push(setTimeout(loop, 240)); }; loop(); }
+      };
+      step();
+    };
+    const playGirlBack = () => {
+      clearGirlTimers();
+      [4, 3, 2, 1, 0].forEach((n, idx) => { girlTimers.push(setTimeout(() => setGirlFrame(n), idx * 180)); });
+    };
     const hero = make("div", { className: "mentor-hero" },
       make("div", { className: "mentor-girl", "aria-hidden": "true" }, girlImg),
       make("div", { className: "mentor-titlebox" },
@@ -331,7 +348,7 @@ function mentorPage() {
       const displayQuestion = file ? "检查文件：" + file.name + (question ? "\n" + question : "") : question;
       appendMessage({ role: "user", content: displayQuestion });
       const loading = appendMessage({ role: "assistant", content: file ? "正在读取文档文字…" : status.enabled ? "正在思考…" : "正在检索…" });
-      girlImg.classList.add("mentor-girl-busy");
+      playGirlTyping();
       textarea.value = ""; resize(); scrollEnd();
       try {
         let result;
@@ -352,7 +369,7 @@ function mentorPage() {
           appendMessage({ role: "assistant", content: result.sources?.length ? "找到以下相关资料：" : "目前没有找到相关资料，请换个更具体的问法。", sources: result.sources });
         }
       } catch (error) { loading.remove(); appendMessage({ role: "assistant", content: error.message + "。请稍后重试。" }); }
-      finally { girlImg.classList.remove("mentor-girl-busy"); release(); attach.disabled = false; scrollEnd(); textarea.focus(); }
+      finally { playGirlBack(); release(); attach.disabled = false; scrollEnd(); textarea.focus(); }
     });
   } catch (error) { shell.replaceChildren(notice(error.message, "error")); } })();
   return shell;
