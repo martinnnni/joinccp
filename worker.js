@@ -331,7 +331,7 @@ export async function mentorRoutes(request, env, path, user) {
       } else if (decision.route === "business") {
         const node = user ? await env.DB.prepare("SELECT name FROM nodes WHERE slug=?").bind(user.current_node_slug).first() : null;
         const messages = modelMessages(question, decision.matches, { stageSlug: user?.current_stage_slug, nodeName: node?.name || "", history });
-        answer = clean(await deepSeekContent(env, { model: "deepseek-flash", messages, stream: false, reasoning_effort: "none", max_tokens: 1100, temperature: 0.2 }), 4000) + "\n" + config.businessExit;
+        answer = clean(await deepSeekContent(env, { model: "deepseek-flash", messages, stream: false, reasoning_effort: "none", max_tokens: 1100, temperature: 0.2 }), 4000);
       }
     } catch {
       answer = config.serviceFailureReply;
