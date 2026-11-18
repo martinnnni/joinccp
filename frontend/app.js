@@ -316,7 +316,7 @@ function mentorPage() {
       : me?.role === "student" ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ["notifications", "通知中心"]]
         : [["login", "登录"], ["register", "辅导员注册"]];
     const navLinks = () => links.map(([page, label]) => make("a", { href: "#" + page, text: label, onclick: closeMentor }));
-    const log = make("div", { className: "mentor-thread", role: "log", "aria-live": "polite", "aria-label": "成长导师对话" });
+    const log = make("div", { className: "mentor-thread", role: "log", "aria-live": "polite", "aria-label": "成长导师对话", tabindex: "0" });
     const empty = make("div", { className: "mentor-empty" },
       make("span", { className: "mentor-kicker", text: (me && me.role === "counselor") ? "OFFICE ASSISTANT / 办公助理" : "GROWTH MENTOR / 成长导师" }),
       make("h1", { text: "今天想了解什么？" }),
@@ -367,12 +367,21 @@ function mentorPage() {
     form.addEventListener("dragleave", event => { event.preventDefault(); dragDepth--; if (dragDepth <= 0) { dragDepth = 0; form.classList.remove("mentor-dragging"); } });
     form.addEventListener("dragover", event => { event.preventDefault(); });
     form.addEventListener("drop", event => { event.preventDefault(); dragDepth = 0; form.classList.remove("mentor-dragging"); acceptFile(event.dataTransfer?.files?.[0]); });
-    const scrollEnd = () => log.lastElementChild?.scrollIntoView({ block: "end", behavior: "smooth" });
+    let userReading = false;
+    for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) log.addEventListener(type, () => { userReading = true; }, { passive: true });
+    const scrollEnd = () => { log.scrollTop = log.scrollHeight; };
+    const focusReplyTop = row => {
+      if (userReading || !row?.isConnected) return;
+      const padding = parseFloat(getComputedStyle(log).paddingTop) || 0;
+      const offset = row.getBoundingClientRect().top - log.getBoundingClientRect().top;
+      log.scrollTop += offset - padding - 10;
+    };
     const reset = () => {
-      mentorHistory = []; pendingRoster = null; pendingConfirm = null; log.replaceChildren();
+      mentorHistory = []; pendingRoster = null; pendingConfirm = null; userReading = false; log.replaceChildren();
       if (workflowMode === "auto-register") appendMessage({ role: "assistant", content: rosterPrompt });
       else log.append(empty);
-      textarea.value = ""; clearFile(); textarea.focus();
+      textarea.value = ""; clearFile();
+      if (workflowMode === "chat") textarea.focus(); else textarea.blur();
     };
     const newChat = () => button("新对话", reset, "mentor-new-chat");
     const aside = make("aside", { className: "mentor-sidebar" },
@@ -452,10 +461,11 @@ function mentorPage() {
         if (!students.length) return appendMessage({ role: "assistant", content: "名单已清空。请重新上传或粘贴名单。" });
         if (!students.every(item => /^[\p{Script=Han}·]{2,20}$/u.test(item.name) && /^\d{6,20}$/.test(item.studentNo)) ||
           new Set(students.map(item => item.studentNo)).size !== students.length) {
-          appendMessage({ role: "assistant", content: "表格里有无效姓名、学号或重复学号。请先修改，再点“确认并注册”。" });
-          scrollEnd(); return;
+          focusReplyTop(appendMessage({ role: "assistant", content: "表格里有无效姓名、学号或重复学号。请先修改，再点“确认并注册”。" }));
+          return;
         }
         if (!window.confirm("确认注册 " + students.length + " 名学生？首次登录密码为 cauc+学号，登录后必须修改。")) return;
+        userReading = false;
         confirm.disabled = true;
         appendMessage({ role: "assistant", content: "正在为 " + students.length + " 名学生创建账号…" });
         scrollEnd();
@@ -464,21 +474,22 @@ function mentorPage() {
           pendingRoster = null; pendingConfirm = null;
           const done = appendMessage({ role: "assistant", content: "已注册 " + saved.count + " 名学生。请通过可信渠道通知他们使用学号和 cauc+学号首次登录，并立即修改密码。" });
           done.querySelector(".mentor-bubble").append(button("查看学生档案", () => { closeMentor(); navigate("admin"); }, "secondary"));
+          focusReplyTop(done);
         } catch (error) {
           confirm.disabled = false;
-          appendMessage({ role: "assistant", content: "注册未完成：" + error.message + "。请修正表格后重试。" });
+          focusReplyTop(appendMessage({ role: "assistant", content: "注册未完成：" + error.message + "。请修正表格后重试。" }));
         }
-        scrollEnd();
       };
       pendingConfirm = confirmAction;
       body.append(tableWrap(table), confirm);
-      scrollEnd();
+      focusReplyTop(row);
     };
     const handleRosterSubmit = async (question, file) => {
-      if (!file && !question) { appendMessage({ role: "assistant", content: rosterPrompt }); scrollEnd(); return; }
+      userReading = false;
+      if (!file && !question) { focusReplyTop(appendMessage({ role: "assistant", content: rosterPrompt })); return; }
       if (log.contains(empty)) empty.remove();
       appendMessage({ role: "user", content: file ? "上传名单：" + file.name : question });
-      textarea.value = ""; resize();
+      textarea.value = ""; textarea.blur(); resize();
       if (!file && /^(确认|确认注册|开始注册)$/.test(question) && pendingConfirm) { await pendingConfirm(); return; }
       pendingRoster = null; pendingConfirm = null;
       const loading = appendMessage({ role: "assistant", content: file ? "正在读取名单并识别姓名和学号…" : "正在识别名单文字…" });
@@ -489,12 +500,12 @@ function mentorPage() {
         const text = file ? await extractRosterText(file) : question;
         const result = parseRosterText(text);
         loading.remove();
-        if (!result.rows.length) appendMessage({ role: "assistant", content: "暂时没识别到有效的姓名和学号。请上传名单，或按“张三 123456789”每行一人粘贴后发送。" });
-        else if (result.rows.length > 50) appendMessage({ role: "assistant", content: "识别到 " + result.rows.length + " 人；一次最多注册 50 人。请把名单拆分后重新上传。" });
+        if (!result.rows.length) focusReplyTop(appendMessage({ role: "assistant", content: "暂时没识别到有效的姓名和学号。请上传名单，或按“张三 123456789”每行一人粘贴后发送。" }));
+        else if (result.rows.length > 50) focusReplyTop(appendMessage({ role: "assistant", content: "识别到 " + result.rows.length + " 人；一次最多注册 50 人。请把名单拆分后重新上传。" }));
         else showRosterPreview(result);
         if (file) clearFile();
-      } catch (error) { loading.remove(); appendMessage({ role: "assistant", content: "名单读取失败：" + error.message + "。请换文件或直接粘贴名单文字。" }); }
-      finally { playGirlBack(); release(); attach.disabled = false; scrollEnd(); textarea.focus(); }
+      } catch (error) { loading.remove(); focusReplyTop(appendMessage({ role: "assistant", content: "名单读取失败：" + error.message + "。请换文件或直接粘贴名单文字。" })); }
+      finally { playGirlBack(); release(); attach.disabled = false; }
     };
     form.addEventListener("submit", async event => {
       event.preventDefault();
@@ -505,12 +516,13 @@ function mentorPage() {
       const release = busy(form);
       attach.disabled = true;
       const history = mentorHistory.slice(-6);
+      userReading = false;
       if (log.contains(empty)) empty.remove();
       const displayQuestion = file ? "检查文件：" + file.name + (question ? "\n" + question : "") : question;
       appendMessage({ role: "user", content: displayQuestion });
       const loading = appendMessage({ role: "assistant", content: file ? "正在读取文档文字…" : status.enabled ? "正在思考…" : "正在检索…" });
       playGirlTyping();
-      textarea.value = ""; resize(); scrollEnd();
+      textarea.value = ""; textarea.blur(); resize(); scrollEnd();
       try {
         let result;
         if (file) {
@@ -524,14 +536,20 @@ function mentorPage() {
           mentorHistory.push({ role: "user", content: displayQuestion }, { role: "assistant", content: result.answer, route: result.route, sources: result.sources || [] });
           const row = appendMessage({ role: "assistant", content: "", sources: result.sources });
           const msg = row.querySelector(".mentor-message");
-          for (const ch of result.answer) { msg.textContent += ch; log.scrollTop = log.scrollHeight; await new Promise(r => setTimeout(r, 14)); }
+          focusReplyTop(row);
+          for (const [index, ch] of Array.from(result.answer).entries()) {
+            msg.textContent += ch;
+            if (index % 8 === 0) focusReplyTop(row);
+            await new Promise(r => setTimeout(r, 14));
+          }
           msg.innerHTML = renderMarkdown(result.answer);
+          focusReplyTop(row);
         } else {
           mentorHistory.push({ role: "user", content: displayQuestion });
-          appendMessage({ role: "assistant", content: result.sources?.length ? "找到以下相关资料：" : "目前没有找到相关资料，请换个更具体的问法。", sources: result.sources });
+          focusReplyTop(appendMessage({ role: "assistant", content: result.sources?.length ? "找到以下相关资料：" : "目前没有找到相关资料，请换个更具体的问法。", sources: result.sources }));
         }
-      } catch (error) { loading.remove(); appendMessage({ role: "assistant", content: error.message + "。请稍后重试。" }); }
-      finally { playGirlBack(); release(); attach.disabled = false; scrollEnd(); textarea.focus(); }
+      } catch (error) { loading.remove(); focusReplyTop(appendMessage({ role: "assistant", content: error.message + "。请稍后重试。" })); }
+      finally { playGirlBack(); release(); attach.disabled = false; }
     });
   } catch (error) { shell.replaceChildren(notice(error.message, "error")); } })();
   return shell;

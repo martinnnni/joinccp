@@ -223,6 +223,8 @@
 
 .mentor-content { display: flex; flex: 1; flex-direction: column; min-height: 0; width: 100%; }
 .mentor-thread {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -230,6 +232,8 @@
   padding: 195px max(24px, calc((100% - 780px)/2)) 18px;
   scrollbar-color: #ded5d6 transparent;
 }
+.mentor-thread::before { content: ""; flex: 1 0 0; }
+.mentor-thread > .mentor-row { flex-shrink: 0; }
 .mentor-empty { display: flex; flex-direction: column; justify-content: center; min-height: 100%; padding: 0 0 6vh; }
 .mentor-kicker { margin-bottom: 14px; color: var(--accent, #a51f2d); font: 11px var(--mono); letter-spacing: .1em; }
 .mentor-empty h1 { margin: 0 0 11px; font: 600 clamp(30px, 3.1vw, 46px)/1.2 var(--display); letter-spacing: -.04em; }
