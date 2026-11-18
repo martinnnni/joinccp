@@ -251,6 +251,45 @@ function profilePage() {
   return shell;
 }
 
+function mentorGirl() {
+  const map = [
+    "......f......",
+    ".....FfF.....",
+    "....HHHHH....",
+    "...HHHHHHH...",
+    "...HSSSSSH...",
+    "...SESSESS...",
+    "...SSBBBSS...",
+    "...SSMMMSS...",
+    "..sSSSSSSSs..",
+    "..sSRRRRRSs..",
+    "...SRRRRRS...",
+    "...RRRRRRR...",
+    "...RrRRrRR...",
+    "....RRRRR....",
+  ];
+  const colors = { f: "#ffd23e", F: "#ff8a3c", H: "#3a2620", S: "#ffd3b0", E: "#241a1a", B: "#ff9aa5", M: "#c25a4a", s: "#f0b48e", R: "#e8512f", r: "#ff7a3c" };
+  const px = 4;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 " + (map[0].length * px) + " " + (map.length * px));
+  svg.setAttribute("class", "mentor-girl-svg");
+  svg.setAttribute("aria-hidden", "true");
+  for (let y = 0; y < map.length; y++)
+    for (let x = 0; x < map[y].length; x++) {
+      const ch = map[y][x];
+      if (ch === ".") continue;
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", String(x * px));
+      rect.setAttribute("y", String(y * px));
+      rect.setAttribute("width", String(px));
+      rect.setAttribute("height", String(px));
+      rect.setAttribute("fill", colors[ch]);
+      if (ch === "E") rect.setAttribute("class", "eye");
+      svg.append(rect);
+    }
+  return svg;
+}
+
 function mentorPage() {
   const shell = make("div", { className: "mentor-app" }, notice("正在打开成长导师…"));
   (async () => { try {
@@ -273,7 +312,6 @@ function mentorPage() {
         make("strong", { text: (index + 1) + ". " + source.title + " · " + source.section }), make("p", { text: source.excerpt })))));
     const appendMessage = item => {
       const row = make("div", { className: "mentor-row " + item.role });
-      if (item.role === "assistant") row.append(make("span", { className: "mentor-avatar", "aria-hidden": "true", text: "CA" }));
       const body = make("div", { className: "mentor-bubble" }, make("div", { className: "mentor-message", text: item.content }));
       if (item.sources?.length) body.append(sourceView(item.sources));
       row.append(body); log.append(row); return row;
@@ -307,10 +345,15 @@ function mentorPage() {
       make("div", { className: "mentor-nav-label", text: "工作区" }), make("nav", { className: "mentor-sidebar-nav", "aria-label": "学生工作区" }, navLinks()),
       make("div", { className: "mentor-sidebar-bottom" }, make("span", { text: "当前会话" }), make("strong", { text: me?.name || me?.username || "学生" })));
     const menu = make("details", { className: "mentor-mobile-menu" }, make("summary", { "aria-label": "打开工作区菜单" }, icon("M4 7h16 M4 12h16 M4 17h16", "菜单")), make("nav", { "aria-label": "学生工作区" }, navLinks()));
-    const header = make("header", { className: "mentor-topbar" }, menu,
-      make("div", { className: "mentor-topbar-title" }, make("strong", { text: mentorTitle() }), make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })), newChat());
+    const hero = make("div", { className: "mentor-hero" },
+      make("div", { className: "mentor-girl", "aria-hidden": "true" }, mentorGirl()),
+      make("div", { className: "mentor-titlebox" },
+        make("strong", { text: mentorTitle() }),
+        make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })),
+      make("span", { className: "think-dots", "aria-hidden": "true", text: "···" }));
+    const header = make("header", { className: "mentor-topbar" }, make("div", { className: "mentor-topbar-left" }, menu, newChat()));
     const content = make("div", { className: "mentor-content" }, log, form);
-    shell.replaceChildren(aside, make("section", { className: "mentor-main", "aria-label": "成长导师" }, header, content));
+    shell.replaceChildren(aside, make("section", { className: "mentor-main", "aria-label": "成长导师" }, hero, header, content));
     if (mentorHistory.length) for (const item of mentorHistory) appendMessage(item); else log.append(empty);
     const resize = () => { textarea.style.height = "auto"; textarea.style.height = Math.min(textarea.scrollHeight, 176) + "px"; };
     textarea.addEventListener("input", resize);
@@ -327,6 +370,7 @@ function mentorPage() {
       const displayQuestion = file ? "检查文件：" + file.name + (question ? "\n" + question : "") : question;
       appendMessage({ role: "user", content: displayQuestion });
       const loading = appendMessage({ role: "assistant", content: file ? "正在读取文档文字…" : status.enabled ? "正在思考…" : "正在检索…" });
+      hero.classList.add("thinking");
       textarea.value = ""; resize(); scrollEnd();
       try {
         let result;
@@ -345,7 +389,7 @@ function mentorPage() {
           appendMessage({ role: "assistant", content: result.sources?.length ? "找到以下相关资料：" : "目前没有找到相关资料，请换个更具体的问法。", sources: result.sources });
         }
       } catch (error) { loading.remove(); appendMessage({ role: "assistant", content: error.message + "。请稍后重试。" }); }
-      finally { release(); attach.disabled = false; scrollEnd(); textarea.focus(); }
+      finally { hero.classList.remove("thinking"); release(); attach.disabled = false; scrollEnd(); textarea.focus(); }
     });
   } catch (error) { shell.replaceChildren(notice(error.message, "error")); } })();
   return shell;
