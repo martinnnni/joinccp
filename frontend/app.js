@@ -252,44 +252,7 @@ function profilePage() {
 }
 
 function mentorGirl() {
-  const map = [
-    "......f.......",
-    ".....FfF......",
-    "....HHHHHH....",
-    "...HHHHHHHH...",
-    "..HHSSSSSSHH..",
-    "..HSEWESEWEH..",
-    "..HSEEESEEEH..",
-    "..HSSSSSSSSH..",
-    "..HSBSSSSBSH..",
-    "..HSSSSSSSSH..",
-    "..HSSSMMSSSH..",
-    "..sSSSSSSSSs..",
-    "..sSRRRRRRSs..",
-    "...RRRRRRRR...",
-    "...RrRRRRrR...",
-    "....RRRRRR....",
-  ];
-  const colors = { f: "#ffd23e", F: "#ff8a3c", H: "#2b1a1a", S: "#ffe3c6", E: "#2a1e3a", W: "#ffffff", B: "#ffa3ae", M: "#d06556", s: "#f0bd94", R: "#e8512f", r: "#ff7a3c" };
-  const px = 4;
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 " + (map[0].length * px) + " " + (map.length * px));
-  svg.setAttribute("class", "mentor-girl-svg");
-  svg.setAttribute("aria-hidden", "true");
-  for (let y = 0; y < map.length; y++)
-    for (let x = 0; x < map[y].length; x++) {
-      const ch = map[y][x];
-      if (ch === ".") continue;
-      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      rect.setAttribute("x", String(x * px));
-      rect.setAttribute("y", String(y * px));
-      rect.setAttribute("width", String(px));
-      rect.setAttribute("height", String(px));
-      rect.setAttribute("fill", colors[ch]);
-      if (ch === "E") rect.setAttribute("class", "eye");
-      svg.append(rect);
-    }
-  return svg;
+  return make("img", { src: "/mentor-girl.png", alt: "", className: "mentor-girl-img", draggable: "false" });
 }
 
 function mentorPage() {
