@@ -253,22 +253,24 @@ function profilePage() {
 
 function mentorGirl() {
   const map = [
-    "......f......",
-    ".....FfF.....",
-    "....HHHHH....",
-    "...HHHHHHH...",
-    "...HSSSSSH...",
-    "...SESSESS...",
-    "...SSBBBSS...",
-    "...SSMMMSS...",
-    "..sSSSSSSSs..",
-    "..sSRRRRRSs..",
-    "...SRRRRRS...",
-    "...RRRRRRR...",
-    "...RrRRrRR...",
-    "....RRRRR....",
+    "......f.......",
+    ".....FfF......",
+    "....HHHHHH....",
+    "...HHHHHHHH...",
+    "..HHSSSSSSHH..",
+    "..HSEWESEWEH..",
+    "..HSEEESEEEH..",
+    "..HSSSSSSSSH..",
+    "..HSBSSSSBSH..",
+    "..HSSSSSSSSH..",
+    "..HSSSMMSSSH..",
+    "..sSSSSSSSSs..",
+    "..sSRRRRRRSs..",
+    "...RRRRRRRR...",
+    "...RrRRRRrR...",
+    "....RRRRRR....",
   ];
-  const colors = { f: "#ffd23e", F: "#ff8a3c", H: "#3a2620", S: "#ffd3b0", E: "#241a1a", B: "#ff9aa5", M: "#c25a4a", s: "#f0b48e", R: "#e8512f", r: "#ff7a3c" };
+  const colors = { f: "#ffd23e", F: "#ff8a3c", H: "#2b1a1a", S: "#ffe3c6", E: "#2a1e3a", W: "#ffffff", B: "#ffa3ae", M: "#d06556", s: "#f0bd94", R: "#e8512f", r: "#ff7a3c" };
   const px = 4;
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 " + (map[0].length * px) + " " + (map.length * px));

@@ -664,7 +664,7 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
 @media (max-width: 850px) {
   .header-inner { display: block; min-height: 0; padding-block: 14px 0; }
   .school-wordmark { width: 197px; }
-  .nav { justify-content: flex-start; gap: 24px; width: 100%; overflow-x: auto; }
+  .nav { justify-content: flex-start; flex-wrap: wrap; gap: 12px 24px; width: 100%; overflow: visible; }
   .nav a, .nav .linklike { padding-block: 11px; }
   .nav a.active::after { bottom: 0; }
   .nav-account { display: none; }
