@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isPersonalQuestion, isSiteHelpQuestion, personalMatches } from "../mentor-personal.js";
+import { isPersonalQuestion, isSiteHelpQuestion, personalMatches, isSelfIdentityQuestion, isChineseQuestion } from "../mentor-personal.js";
 import { retrieve, reviewStandards } from "../rag.js";
 import { parseReview } from "../mentor-review.js";
 import { mentorRoutes } from "../worker.js";
@@ -107,4 +107,31 @@ test("文件检查依次识别表单和查询规范，拒绝伪造原文中的�
   } finally { globalThis.fetch = oldFetch; }
   assert.equal(parseReview('{"typos":[{"original":"伪造","suggestion":"改"}],"issues":[]}', text, 3).typos.length, 0);
   await assert.rejects(mentorRoutes(request("/api/mentor/review", { filename: "file.txt", text }), env, "/api/mentor/review", student), /只支持/);
+});
+
+test("我是谁：未登录答不知道，登录后答 SQL 档案，英文提问用英文回答", async () => {
+  assert.equal(isSelfIdentityQuestion("我是谁"), true);
+  assert.equal(isSelfIdentityQuestion("who am i"), true);
+  assert.equal(isSelfIdentityQuestion("what's my student number"), true);
+  assert.equal(isSelfIdentityQuestion("入党申请书怎么写"), false);
+  assert.equal(isChineseQuestion("我是谁"), true);
+  assert.equal(isChineseQuestion("who am i"), false);
+  const env = { DEEPSEEK_API_KEY: "test-key", DB: { prepare(sql) {
+    return { bind() { return this; },
+      async first() {
+        if (sql.includes("departments")) return { name: "理学院" };
+        if (sql.includes("stages")) return { name: "申请入党" };
+        if (sql.includes("nodes")) return { name: "提出入党申请" };
+        return null;
+      },
+      async run() { return { meta: { changes: 1 } }; } };
+  } } };
+  const guest = await (await mentorRoutes(request("/api/mentor/chat", { question: "我是谁" }), env, "/api/mentor/chat", null)).json();
+  assert.match(guest.answer, /不知道/);
+  const guestEn = await (await mentorRoutes(request("/api/mentor/chat", { question: "who am i" }), env, "/api/mentor/chat", null)).json();
+  assert.match(guestEn.answer, /don't know/i);
+  const logged = await (await mentorRoutes(request("/api/mentor/chat", { question: "我是谁" }), env, "/api/mentor/chat", student)).json();
+  assert.match(logged.answer, /张同学.*20260001.*理学院.*申请入党/);
+  const loggedEn = await (await mentorRoutes(request("/api/mentor/chat", { question: "who am i" }), env, "/api/mentor/chat", student)).json();
+  assert.match(loggedEn.answer, /You are 张同学.*20260001.*理学院/i);
 });

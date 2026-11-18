@@ -29,5 +29,13 @@
   </header>
   <main class="container main" id="app" aria-live="polite"></main>
   <footer class="site-footer"><div class="container footer-inner"><span>党员发展计划辅助系统</span><span>测试版本 · 内容仅供党务工作参考</span></div></footer>
+  <button type="button" class="mentor-fab" id="mentorFab" aria-label="打开成长导师" aria-expanded="false" aria-controls="mentorPanel">
+    <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12 20 4 14 20 11 13 4 12Z"/></svg>
+    <span>成长导师</span>
+  </button>
+  <aside class="mentor-panel" id="mentorPanel" role="dialog" aria-label="成长导师悬浮窗" aria-modal="false" hidden>
+    <button type="button" class="mentor-panel-close" id="mentorPanelClose" aria-label="关闭成长导师">×</button>
+    <div class="mentor-panel-body" id="mentorPanelBody"></div>
+  </aside>
 </body>
 </html>

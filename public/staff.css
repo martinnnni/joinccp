@@ -1,17 +1,38 @@
-.view-profile > .panel:first-of-type { background: #a51f2d; color: #fff; border-color: #a51f2d; }
-.view-profile > .panel:first-of-type h2,
-.view-profile > .panel:first-of-type p { color: #fff; }
-.view-profile > .panel:first-of-type .badge { color: #fff; background: rgba(255,255,255,.14); border-color: rgba(255,255,255,.55); }
-.view-profile > .panel:first-of-type .progress-track { background: rgba(255,255,255,.25); }
-.view-profile > .panel:first-of-type .progress-track span { background: #fff; }
-.bulk-tools { display: flex; align-items: end; flex-wrap: wrap; gap: .75rem; margin: 1rem 0; }
-.bulk-tools .field { min-width: min(100%, 17rem); margin: 0; }
-.bulk-tools .btn, .bulk-tools .secondary { min-height: 2.7rem; }
-.bulk-count { align-self: center; color: #5e6266; min-width: 5.5rem; }
-.bulk-select { width: 2.5rem; text-align: center; }
-.bulk-select input { width: 1.05rem; height: 1.05rem; accent-color: #a51f2d; cursor: pointer; }
-.invite-codes { display: block; width: 100%; min-height: 7rem; margin-top: .75rem; padding: .75rem; font: .85rem/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; border: 1px solid #d9d9d9; background: #fff; color: #222; resize: vertical; }
-.review-pill { display: inline-block; padding: .25rem .55rem; border: 1px solid #c9c9c9; border-radius: 2rem; white-space: nowrap; }
-.review-pill.approved { color: #176249; border-color: #176249; }
-.review-pill.returned { color: #a51f2d; border-color: #a51f2d; }
-@media (max-width: 700px) { .bulk-tools { align-items: stretch; } .bulk-tools .field, .bulk-tools .btn, .bulk-tools .secondary { width: 100%; } .bulk-count { width: 100%; } }
+/* ============================================================================
+   员工工具（工作台 / 已提交文件）—— 与 site.css 红白 token 统一
+   ========================================================================== */
+
+.bulk-tools {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 4px 0 14px;
+}
+.bulk-tools .field { min-width: min(100%, 240px); margin: 0; }
+.bulk-tools .btn, .bulk-tools .secondary { min-height: 44px; }
+.bulk-count { align-self: center; color: var(--muted); font-size: 13px; min-width: 88px; }
+.bulk-select { width: 40px; text-align: center; }
+.bulk-select input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+.invite-codes {
+  display: block;
+  width: 100%;
+  min-height: 112px;
+  margin-top: 12px;
+  padding: 12px;
+  font: 13px/1.6 var(--mono);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink);
+  resize: vertical;
+}
+.review-pill { display: inline-block; padding: 3px 10px; border: 1px solid var(--line-strong); border-radius: 999px; font-size: 13px; white-space: nowrap; }
+.review-pill.approved { color: var(--success); border-color: var(--success); }
+.review-pill.returned { color: var(--accent); border-color: var(--accent); }
+
+@media (max-width: 700px) {
+  .bulk-tools { align-items: stretch; }
+  .bulk-tools .field, .bulk-tools .btn, .bulk-tools .secondary { width: 100%; }
+  .bulk-count { width: 100%; }
+}

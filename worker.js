@@ -1,7 +1,7 @@
 import { retrieve, publicSources, modelMessages, reviewStandards, knowledgeCount } from "./rag.js";
 import { mentorConfig } from "./mentor-config.js";
 import { classifyIntent, decideMentorRoute, chitchatMessages, isIdentityQuestion } from "./mentor-routing.js";
-import { isPersonalQuestion, isSiteHelpQuestion, personalMatches } from "./mentor-personal.js";
+import { isPersonalQuestion, isSiteHelpQuestion, personalMatches, isSelfIdentityQuestion, isChineseQuestion } from "./mentor-personal.js";
 import { identifyMessages, parseIdentification, reviewMessages, parseReview, formatReview } from "./mentor-review.js";
 import { isCurrentTimeQuestion, getCurrentTime } from "./mentor-time.js";
 
@@ -231,12 +231,12 @@ async function deepSeekContent(env, payload) {
 async function logMentorQuestion(env, user, question, decision) {
   try {
     await env.DB.prepare("INSERT INTO mentor_question_logs(user_id,question,intent,top_similarity,outcome) VALUES(?,?,?,?,?)")
-      .bind(user.id, question, decision.intent, decision.topSimilarity, decision.outcome).run();
+      .bind(user?.id ?? null, question, decision.intent, decision.topSimilarity, decision.outcome).run();
   } catch (error) { console.error("mentor question log failed", error); }
 }
 async function mentorMatches(env, user, question, previousQuestion) {
-  const shared = retrieve(question, { stageSlug: user.current_stage_slug, previousQuestion });
-  if (!isPersonalQuestion(question)) return shared;
+  const shared = retrieve(question, { stageSlug: user?.current_stage_slug, previousQuestion });
+  if (!user || !isPersonalQuestion(question)) return shared;
   const records = await env.DB.prepare("SELECT m.name,m.stage_slug,s.name AS stage_name,r.status,r.r2_key FROM materials m JOIN stages s ON s.slug=m.stage_slug LEFT JOIN material_records r ON r.material_id=m.id AND r.student_id=? ORDER BY s.position,m.id")
     .bind(user.id).all();
   const node = await env.DB.prepare("SELECT name FROM nodes WHERE slug=?").bind(user.current_node_slug).first();
@@ -244,12 +244,13 @@ async function mentorMatches(env, user, question, previousQuestion) {
 }
 export async function mentorRoutes(request, env, path, user) {
   if (!path.startsWith("/api/mentor")) return null;
-  assert(user.role === "student", "仅学生可使用成长导师", 403);
+  if (user && user.role !== "student") assert(false, "仅学生可使用成长导师", 403);
   const enabled = !!env.DEEPSEEK_API_KEY;
   if (path === "/api/mentor" && request.method === "GET") {
     return json({ ok: true, enabled, knowledgeCount, message: enabled ? "成长导师已启用" : "知识库检索已就绪，AI 回答等待配置 API Key" });
   }
   if (path === "/api/mentor/review" && request.method === "POST") {
+    assert(user, "请先登录", 401);
     assert(enabled, "成长导师尚未启用，请先配置 DeepSeek API Key", 503);
     const data = await bodyJson(request);
     const filename = clean(data.filename, 150);
@@ -283,6 +284,21 @@ export async function mentorRoutes(request, env, path, user) {
       await logMentorQuestion(env, user, question, decision);
       return json({ ok: true, answer: getCurrentTime(), sources: [], route: "current_time", intent: "chitchat" });
     }
+    if (isSelfIdentityQuestion(question)) {
+      const decision = { intent: "business", outcome: "answered", topSimilarity: null };
+      await logMentorQuestion(env, user, question, decision);
+      const en = !isChineseQuestion(question);
+      if (!user) return json({ ok: true, answer: en ? "I don't know. Log in and I can tell you." : "不知道。登录后我才能告诉你。", sources: [], route: "identity", intent: "business" });
+      const [dept, stage, node] = await Promise.all([
+        env.DB.prepare("SELECT name FROM departments WHERE id=?").bind(user.department_id).first(),
+        env.DB.prepare("SELECT name FROM stages WHERE slug=?").bind(user.current_stage_slug).first(),
+        env.DB.prepare("SELECT name FROM nodes WHERE slug=?").bind(user.current_node_slug).first()
+      ]);
+      const answer = en
+        ? "You are " + (user.name || "—") + ", student number " + (user.student_no || "—") + ", " + (dept?.name || "department unset") + ", currently at the \u201c" + (stage?.name || "unset") + "\u201d stage, node \u201c" + (node?.name || "unset") + "\u201d. Contact your counselor if anything is wrong."
+        : "你是" + (user.name || "未填") + "，学号 " + (user.student_no || "未填") + "，" + (dept?.name || "院系未填") + "，当前处于「" + (stage?.name || "未设置") + "」阶段，节点「" + (node?.name || "未设置") + "」。如信息有误，请联系辅导员。";
+      return json({ ok: true, answer, sources: [], route: "identity", intent: "business" });
+    }
     assert(enabled, "成长导师尚未启用，请先配置 DeepSeek API Key", 503);
     const config = mentorConfig(env);
     const classification = isIdentityQuestion(question)
@@ -294,19 +310,27 @@ export async function mentorRoutes(request, env, path, user) {
     }
     const matches = classification.intent === "business" && !isIdentityQuestion(question)
       ? await mentorMatches(env, user, question, previousQuestion) : null;
-    const decision = decideMentorRoute({ question, classification, history, stageSlug: user.current_stage_slug, previousQuestion, config,
+    const decision = decideMentorRoute({ question, classification, history, stageSlug: user?.current_stage_slug, previousQuestion, config,
       retrieveFn: matches ? () => matches : retrieve });
+    // 非中文提问检索不到中文知识库时，不硬停，交给模型用提问语言回答
+    if (decision.route === "kb_gap" && !isChineseQuestion(question)) {
+      decision.route = "business";
+      decision.matches = matches || [];
+      decision.outcome = "answered";
+      decision.answer = "";
+      decision.sources = publicSources(matches || []);
+    }
     let answer = decision.answer || "";
     try {
       if (decision.route === "chitchat") {
         const relevant = /入党|党员|思想汇报|自传|培养|党课|支部|党组织|积极分子|预备|转正/.test(question)
-          ? retrieve(question, { stageSlug: user.current_stage_slug, previousQuestion }).filter(item => item.similarity >= config.similarityThreshold).slice(0, 3) : [];
+          ? retrieve(question, { stageSlug: user?.current_stage_slug, previousQuestion }).filter(item => item.similarity >= config.similarityThreshold).slice(0, 3) : [];
         decision.sources = publicSources(relevant);
         decision.topSimilarity = relevant.length ? Math.max(...relevant.map(item => item.similarity)) : null;
         answer = clean(await deepSeekContent(env, { model: config.classifierModel, messages: chitchatMessages(question, config, relevant), stream: false, reasoning_effort: "none", max_tokens: 850 }), 4000);
       } else if (decision.route === "business") {
-        const node = await env.DB.prepare("SELECT name FROM nodes WHERE slug=?").bind(user.current_node_slug).first();
-        const messages = modelMessages(question, decision.matches, { stageSlug: user.current_stage_slug, nodeName: node?.name || "", history });
+        const node = user ? await env.DB.prepare("SELECT name FROM nodes WHERE slug=?").bind(user.current_node_slug).first() : null;
+        const messages = modelMessages(question, decision.matches, { stageSlug: user?.current_stage_slug, nodeName: node?.name || "", history });
         answer = clean(await deepSeekContent(env, { model: "deepseek-flash", messages, stream: false, reasoning_effort: "none", max_tokens: 1100, temperature: 0.2 }), 4000) + "\n" + config.businessExit;
       }
     } catch {
@@ -625,7 +649,8 @@ export default {
       let response = await authRoutes(request, env, path);
       if (response) return secured(response);
       const user = await currentUser(request, env);
-      assert(user, "请先登录", 401);
+      const guestMentor = !user && (path === "/api/mentor" || path === "/api/mentor/chat" || path === "/api/mentor/retrieve");
+      if (!guestMentor) assert(user, "请先登录", 401);
       if (path === "/api/change-password" && request.method === "POST") return secured(await changePassword(request, env, user));
       response = await mentorRoutes(request, env, path, user)
         || await studentRoutes(request, env, path, user)

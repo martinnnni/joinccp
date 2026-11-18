@@ -79,7 +79,11 @@ function nav() {
     ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ["mentor", "成长导师"], ["notifications", "通知"], ["password", "修改密码"]]
     : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"], ["password", "修改密码"]])
     : (config?.initialized ? [["login", "登录"], ["register", "受邀注册"]] : [["bootstrap", "初始化"]]);
-  for (const [page, label] of items) navigation.append(make("a", { href: "#" + page, text: label, className: active === page ? "active" : "" }));
+  for (const [page, label] of items) {
+    const link = make("a", { href: "#" + page, text: label, className: active === page ? "active" : "" });
+    if (page === "mentor") link.addEventListener("click", event => { event.preventDefault(); openMentor(); });
+    navigation.append(link);
+  }
   if (me) navigation.append(make("span", { className: "nav-account", text: me.name || me.username }), button("退出", async () => {
     await post("/api/logout", {}); me = null; mentorHistory = []; navigate("login");
   }, "linklike"));
@@ -285,7 +289,7 @@ function mentorPage() {
       make("div", { className: "mentor-sidebar-bottom" }, make("span", { text: "当前会话" }), make("strong", { text: me?.name || me?.username || "学生" })));
     const menu = make("details", { className: "mentor-mobile-menu" }, make("summary", { "aria-label": "打开工作区菜单" }, icon("M4 7h16 M4 12h16 M4 17h16", "菜单")), make("nav", { "aria-label": "学生工作区" }, navLinks()));
     const header = make("header", { className: "mentor-topbar" }, menu,
-      make("div", { className: "mentor-topbar-title" }, make("strong", { text: "成长导师" }), make("span", { text: "党员发展计划辅助系统" })), newChat());
+      make("div", { className: "mentor-topbar-title" }, make("strong", { text: "成长导师" }), make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })), newChat());
     const content = make("div", { className: "mentor-content" }, log, form);
     shell.replaceChildren(aside, make("section", { className: "mentor-main", "aria-label": "成长导师" }, header, content));
     if (mentorHistory.length) for (const item of mentorHistory) appendMessage(item); else log.append(empty);
@@ -326,6 +330,25 @@ function mentorPage() {
     });
   } catch (error) { shell.replaceChildren(notice(error.message, "error")); } })();
   return shell;
+}
+
+let mentorPanelOpen = false;
+function openMentor() {
+  const panel = document.getElementById("mentorPanel");
+  const body = document.getElementById("mentorPanelBody");
+  const fab = document.getElementById("mentorFab");
+  if (!panel || !body) return;
+  if (!body.dataset.built) { body.dataset.built = "1"; body.replaceChildren(mentorPage()); }
+  panel.hidden = false;
+  mentorPanelOpen = true;
+  if (fab) { fab.setAttribute("aria-expanded", "true"); fab.classList.add("mentor-fab--open"); }
+}
+function closeMentor() {
+  const panel = document.getElementById("mentorPanel");
+  const fab = document.getElementById("mentorFab");
+  if (panel) panel.hidden = true;
+  mentorPanelOpen = false;
+  if (fab) { fab.setAttribute("aria-expanded", "false"); fab.classList.remove("mentor-fab--open"); }
 }
 
 function notificationsPage() {
@@ -685,6 +708,11 @@ async function init() {
       history.replaceState(null, "", "#login");
     }
     render();
+    const fab = document.getElementById("mentorFab");
+    if (fab) fab.addEventListener("click", () => mentorPanelOpen ? closeMentor() : openMentor());
+    const close = document.getElementById("mentorPanelClose");
+    if (close) close.addEventListener("click", closeMentor);
+    document.addEventListener("keydown", event => { if (event.key === "Escape" && mentorPanelOpen) closeMentor(); });
   } catch (error) {
     root.replaceChildren(h("暂时无法连接"), notice(error.message, "error"));
   }
