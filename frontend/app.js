@@ -102,7 +102,7 @@ async function refreshMe() {
 function render() {
   document.body.dataset.surface = me ? "workspace" : "entry";
   document.body.dataset.role = me?.role || "guest";
-  const fabLabel = document.querySelector("#mentorFab span");
+  const fabLabel = document.querySelector("#mentorFab .mentor-fab-label");
   if (fabLabel) fabLabel.textContent = mentorTitle();
   document.querySelector(".brand").setAttribute("href", me ? me.role === "student" ? "#profile" : "#admin" : "#login");
   nav();
@@ -155,13 +155,6 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
       make("span", { text: includeInvite ? "已有账号？" : "收到了邀请码？" }),
       button(includeInvite ? "返回登录" : "受邀注册", () => navigate(includeInvite ? "login" : "register"), "linklike")));
   card.classList.add("auth-card");
-  const titleCta = (includeInvite || includeBootstrap) ? null
-    : make("a", { className: "register-cta", href: "#register", "aria-label": "受邀注册" },
-        "受邀注册", make("span", { "aria-hidden": "true", text: " →" }));
-  const scrollHint = make("div", { className: "scroll-hint", "aria-hidden": "true" },
-    make("span", { text: "下滑注册" }),
-    make("svg", { viewBox: "0 0 24 24", width: "16", height: "16", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round" },
-      make("path", { d: "M12 5v14 M6 13l6 6 6-6" })));
   const story = make("div", { className: "auth-story" },
     make("div", { className: "orbit-field", "aria-hidden": "true" },
       make("span", { className: "orbit-ring orbit-ring-one" }),
@@ -175,13 +168,10 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
       make("span", { className: "orbit-node orbit-node-five" })),
     make("div", { className: "auth-story-copy" },
       make("span", { className: "story-intro", text: "中国民航大学 / 培养流程" }),
-      make("div", { className: "auth-title-row" },
-        make("h1", {}, "党员发展计划", make("br"), "辅助系统"),
-        titleCta),
+      make("h1", {}, "党员发展计划", make("br"), "辅助系统"),
       p("在这里统一查看培养进度、材料清单和站内通知")),
     make("ol", { className: "stage-strip", "aria-label": "培养流程的五个阶段" },
-      ["申请入党", "积极分子培养", "发展对象考察", "接收预备党员", "培养考察与转正"].map(name => make("li", { text: name }))),
-    scrollHint);
+      ["申请入党", "积极分子培养", "发展对象考察", "接收预备党员", "培养考察与转正"].map(name => make("li", { text: name }))));
   return make("div", { className: "auth-layout" }, story, card);
 }
 function login() { return accountForm("登录"); }
@@ -288,19 +278,24 @@ function mentorPage() {
     const attachment = make("div", { className: "mentor-attachment", hidden: "" });
     const clearFile = () => { selectedFile = null; fileInput.value = ""; attachment.hidden = true; attachment.replaceChildren(); textarea.required = true; };
     const attach = make("button", { type: "button", className: "mentor-attach", "aria-label": "上传 Word 或 PDF 文件", title: "上传 Word DOCX 或 PDF" }, icon("M8 12.5 14.5 6a3 3 0 0 1 4.2 4.2l-8.1 8.1a5 5 0 0 1-7.1-7.1l8.4-8.4", "附件"));
-    attach.addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", () => {
-      const file = fileInput.files?.[0];
+    const acceptFile = file => {
       if (!file) return;
       if (!/\.(docx|pdf)$/i.test(file.name) || file.size > 10 * 1024 * 1024 || file.size < 10) {
         clearFile(); appendMessage({ role: "assistant", content: "请上传不超过 10 MB 的 Word DOCX 或 PDF。旧版 .doc 请另存为 .docx。" }); return;
       }
       selectedFile = file; textarea.required = false; attachment.hidden = false;
       attachment.replaceChildren(make("span", { text: file.name }), button("移除", clearFile, "mentor-remove-attachment"));
-    });
+    };
+    attach.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => acceptFile(fileInput.files?.[0]));
     const form = make("form", { className: "mentor-composer" }, fileInput, attachment,
       make("div", { className: "mentor-composer-box" }, attach, textarea, send),
       make("p", { className: "mentor-composer-note", text: "校内要求以辅导员通知为准" }));
+    let dragDepth = 0;
+    form.addEventListener("dragenter", event => { event.preventDefault(); dragDepth++; form.classList.add("mentor-dragging"); });
+    form.addEventListener("dragleave", event => { event.preventDefault(); dragDepth--; if (dragDepth <= 0) { dragDepth = 0; form.classList.remove("mentor-dragging"); } });
+    form.addEventListener("dragover", event => { event.preventDefault(); });
+    form.addEventListener("drop", event => { event.preventDefault(); dragDepth = 0; form.classList.remove("mentor-dragging"); acceptFile(event.dataTransfer?.files?.[0]); });
     const scrollEnd = () => log.lastElementChild?.scrollIntoView({ block: "end", behavior: "smooth" });
     const reset = () => { mentorHistory = []; log.replaceChildren(empty); textarea.value = ""; clearFile(); textarea.focus(); };
     const newChat = () => button("新对话", reset, "mentor-new-chat");
