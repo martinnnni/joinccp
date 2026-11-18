@@ -258,12 +258,10 @@ body[data-surface=entry] .main { width: 100%; padding: 0; }
   letter-spacing: .10em;
 }
 .auth-story h1 {
-  max-width: 11ch;
   margin: 0 0 22px;
   color: var(--ink);
   font: 700 clamp(52px, 6.6vw, 100px)/1.08 var(--display);
   letter-spacing: -.05em;
-  overflow-wrap: anywhere;
 }
 .auth-story-copy p {
   max-width: 38ch;
@@ -339,6 +337,8 @@ body[data-surface=entry] .main { width: 100%; padding: 0; }
   border-top: 1px solid var(--line);
 }
 .auth-status { grid-column: 1; grid-row: 1; color: var(--accent); font: 13px var(--mono); letter-spacing: .06em; }
+/* 覆盖 .panel 的 padding（同优先级、靠后），保持登录卡左右内边距 */
+.auth-layout .auth-card { padding: 28px max(3.6vw, 32px) 32px; }
 .auth-card .page-title { grid-column: 1; grid-row: 2; margin: 8px 0 6px; font-size: clamp(30px, 2.7vw, 40px); }
 .auth-help { grid-column: 1; grid-row: 3; color: var(--muted); font-size: 14px; line-height: 1.55; }
 .auth-switch { grid-column: 1; grid-row: 4; display: flex; align-items: center; gap: 7px; margin-top: 6px; color: var(--muted); font-size: 14px; }
@@ -658,7 +658,7 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
   .auth-layout { display: block; min-height: 0; }
   .auth-story { min-height: 560px; padding: 32px 20px 20px; }
   .auth-story-copy { width: 100%; margin: auto 0 48px; }
-  .auth-story h1 { max-width: 10ch; font-size: clamp(44px, 11vw, 62px); line-height: 1.12; }
+  .auth-story h1 { font-size: clamp(44px, 11vw, 62px); line-height: 1.12; }
   .auth-story-copy p { max-width: 27ch; font-size: 15px; }
   .auth-story::after { background-position: 68% center; }
   .auth-story::before { background: linear-gradient(90deg, rgba(247,249,248,.95), rgba(247,249,248,.80) 58%, rgba(247,249,248,.60)); }
