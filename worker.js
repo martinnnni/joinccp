@@ -248,7 +248,7 @@ async function mentorMatches(env, user, question, previousQuestion) {
 }
 export async function mentorRoutes(request, env, path, user) {
   if (!path.startsWith("/api/mentor")) return null;
-  if (user && user.role !== "student" && user.role !== "counselor") assert(false, "仅学生和辅导员可使用成长导师", 403);
+  if (user && !["student", "counselor", "admin"].includes(user.role)) assert(false, "仅学生、辅导员和管理员可使用成长导师", 403);
   const enabled = !!env.DEEPSEEK_API_KEY;
   if (path === "/api/mentor" && request.method === "GET") {
     return json({ ok: true, enabled, knowledgeCount, message: enabled ? "成长导师已启用" : "知识库检索已就绪，AI 回答等待配置 API Key" });

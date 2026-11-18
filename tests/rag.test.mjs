@@ -25,14 +25,15 @@ test("模型消息限定资料与引用格式，不注入学生身份信息", ()
   assert.match(messages[0].content, /不要索取姓名、学号/);
 });
 
-test("未配置密钥时允许学生检索，但聊天仍关闭；管理员不能调用", async () => {
+test("未配置密钥时允许学生和管理员检索，但聊天仍关闭", async () => {
   const env = {};
   const info = await mentorRoutes(request("/api/mentor"), env, "/api/mentor", student);
   assert.equal((await info.json()).enabled, false);
   const found = await mentorRoutes(request("/api/mentor/retrieve", { question: "入党申请书怎么写？" }), env, "/api/mentor/retrieve", student);
   assert.equal((await found.json()).sources[0].file, "流程图.md");
+  const adminFound = await mentorRoutes(request("/api/mentor/retrieve", { question: "入党申请书怎么写？" }), env, "/api/mentor/retrieve", { role: "admin" });
+  assert.equal((await adminFound.json()).sources[0].file, "流程图.md");
   await assert.rejects(mentorRoutes(request("/api/mentor/chat", { question: "入党申请书怎么写？" }), env, "/api/mentor/chat", student), /尚未启用/);
-  await assert.rejects(mentorRoutes(request("/api/mentor/retrieve", { question: "入党申请书怎么写？" }), env, "/api/mentor/retrieve", { role: "admin" }), /仅学生和辅导员/);
 });
 
 test("聊天仅发送检索片段，并可连续提问", async () => {
