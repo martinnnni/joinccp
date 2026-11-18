@@ -185,15 +185,15 @@
   left: 0;
   right: 0;
   z-index: 4;
-  height: 150px;
+  height: 180px;
   pointer-events: none;
 }
 .mentor-girl {
   position: absolute;
   top: 0;
   left: 50%;
-  width: 100px;
-  height: 106px;
+  width: 84px;
+  height: 136px;
   transform: translateX(-50%);
   z-index: 5;
   transition: transform .3s ease;
@@ -201,7 +201,7 @@
 .mentor-girl-img { display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; user-select: none; -webkit-user-drag: none; pointer-events: none; }
 .mentor-titlebox {
   position: absolute;
-  top: 90px;
+  top: 116px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 4;
@@ -220,27 +220,6 @@
 }
 .mentor-titlebox strong { font-size: 15px; font-weight: 700; color: var(--mentor-ink); white-space: nowrap; }
 .mentor-titlebox span { font-size: 11px; color: var(--mentor-muted); letter-spacing: .02em; white-space: nowrap; }
-.think-dots {
-  position: absolute;
-  top: 6px;
-  left: calc(50% + 62px);
-  color: var(--accent, #a51f2d);
-  font: 700 15px var(--mono);
-  letter-spacing: 2px;
-  opacity: 0;
-  transition: opacity .2s;
-}
-.mentor-hero.thinking .mentor-girl { animation: mentor-sway 1.4s ease-in-out infinite; }
-.mentor-hero.thinking .think-dots { opacity: 1; animation: mentor-dots 1.2s ease-in-out infinite; }
-@keyframes mentor-sway {
-  0%, 100% { transform: translateX(-50%) rotate(0deg); }
-  30% { transform: translateX(-50%) rotate(-4deg); }
-  60% { transform: translateX(-50%) rotate(3deg); }
-}
-@keyframes mentor-dots {
-  0%, 100% { opacity: .25; }
-  50% { opacity: 1; }
-}
 
 .mentor-content { display: flex; flex: 1; flex-direction: column; min-height: 0; width: 100%; }
 .mentor-thread {
@@ -248,7 +227,7 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   width: 100%;
-  padding: 172px max(24px, calc((100% - 780px)/2)) 18px;
+  padding: 195px max(24px, calc((100% - 780px)/2)) 18px;
   scrollbar-color: #ded5d6 transparent;
 }
 .mentor-empty { display: flex; flex-direction: column; justify-content: center; min-height: 100%; padding: 0 0 6vh; }
@@ -353,7 +332,7 @@
   .mentor-mobile-menu nav { position: absolute; z-index: 20; top: 43px; left: -6px; display: grid; min-width: 180px; padding: 8px; border: 1px solid var(--mentor-line); border-radius: 10px; background: #fff; box-shadow: 0 14px 36px rgba(0,0,0,.1); }
   .mentor-mobile-menu nav a { padding: 9px 11px; border-radius: 6px; color: var(--mentor-ink); font-size: 13px; text-decoration: none; }
   .mentor-mobile-menu nav a:hover { background: #f6f0f1; }
-  .mentor-thread { padding: 168px 18px 8px; }
+  .mentor-thread { padding: 185px 18px 8px; }
   .mentor-empty { justify-content: center; padding-bottom: 4vh; }
   .mentor-empty h1 { font-size: clamp(30px, 8vw, 39px); }
   .mentor-empty > p { margin-bottom: 30px; }
