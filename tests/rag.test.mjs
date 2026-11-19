@@ -129,6 +129,35 @@ test("英文问题未命中知识库时走 advisory，用提问语言回答并�
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("党员领域实操问题被误判为无关时仍先检索并自主回答", async () => {
+  const logs = [];
+  let calls = 0;
+  const env = { DEEPSEEK_API_KEY: "test-key", DB: { prepare(sql) {
+    let values = [];
+    return {
+      bind(...args) { values = args; return this; },
+      async run() { if (sql.includes("mentor_question_logs")) logs.push(values); return { meta: { changes: 1 } }; },
+      async first() { return { name: "提出入党申请" }; }
+    };
+  } } };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    calls++;
+    const payload = JSON.parse(options.body);
+    const content = payload.response_format ? '{"intent":"out_of_scope","reason":"看起来像无关问题"}' : "入党申请书弄脏了建议尽快重抄或更换一份，并先向辅导员说明情况。";
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+  };
+  try {
+    const response = await mentorRoutes(request("/api/mentor/chat", { question: "我入党申请书脏了怎么办？" }), env, "/api/mentor/chat", student);
+    const result = await response.json();
+    assert.ok(["business", "advisory"].includes(result.route)); // 不是 out_of_scope 搪塞
+    assert.doesNotMatch(result.answer, /党员发展流程、材料与填写要求/);
+    assert.match(result.answer, /重抄|更换|辅导员/);
+    assert.equal(calls, 2); // 分类 + 回答
+    assert.equal(logs[0][2], "business"); // 意图已纠正为 business
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("身份问法固定回复，不调用外部模型", async () => {
   const logs = [];
   const env = { DEEPSEEK_API_KEY: "test-key", DB: { prepare(sql) {

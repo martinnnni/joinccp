@@ -1,7 +1,7 @@
 import { retrieve, publicSources, modelMessages, advisoryMessages, reviewStandards, knowledgeCount } from "./rag.js";
 import { mentorConfig } from "./mentor-config.js";
 import { classifyIntent, decideMentorRoute, chitchatMessages, isIdentityQuestion } from "./mentor-routing.js";
-import { isPersonalQuestion, isSiteHelpQuestion, personalMatches, isSelfIdentityQuestion, isChineseQuestion } from "./mentor-personal.js";
+import { isPersonalQuestion, isSiteHelpQuestion, personalMatches, isSelfIdentityQuestion, isChineseQuestion, isPartyDomainQuestion } from "./mentor-personal.js";
 import { identifyMessages, parseIdentification, reviewMessages, parseReview, formatReview } from "./mentor-review.js";
 import { isCurrentTimeQuestion, getCurrentTime } from "./mentor-time.js";
 
@@ -348,6 +348,10 @@ export async function mentorRoutes(request, env, path, user) {
     if (classification.intent === "chitchat" && (isPersonalQuestion(question) || isSiteHelpQuestion(question))) {
       classification.intent = "business";
       classification.reason = "需要当前档案或系统操作依据";
+    }
+    if ((classification.intent === "out_of_scope" || classification.intent === "uncertain") && isPartyDomainQuestion(question)) {
+      classification.intent = "business";
+      classification.reason = "涉及党员发展相关事项，先检索后自主回答";
     }
     const matches = classification.intent === "business" && !isIdentityQuestion(question)
       ? await mentorMatches(env, user, question, previousQuestion) : null;

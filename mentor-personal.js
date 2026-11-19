@@ -23,6 +23,13 @@ export function isChineseQuestion(question) {
   return /[\u4e00-\u9fff]/.test(String(question));
 }
 
+// 党员发展领域问题（含材料、文书等日常实操）。分类器把这类问题误判为无关/不确定时，
+// 用这个确定性兜底：涉及党员发展的事项一律先走检索，检索不到再自主回答，绝不搪塞。
+const partyDomainPattern = /入党|党员|申请书|思想汇报|自传|志愿书|党课|支部|党组织|党委|积极分子|预备|转正|政审|发展对象|介绍人|宣誓|公示|座谈|组织生活|党费|党章|推优|培养考察|培养联系人|材料|递交/;
+export function isPartyDomainQuestion(question) {
+  return partyDomainPattern.test(String(question));
+}
+
 const safe = (value, limit = 80) => String(value ?? "").replace(/[\r\n\t]/g, " ").trim().slice(0, limit) || "未填写";
 
 export function personalMatches(question, user, rows = [], nodeName = "") {
