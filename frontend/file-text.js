@@ -34,10 +34,11 @@ async function readDocx(bytes) {
 }
 
 async function readPdf(bytes) {
-  const pdfjs = await import("/pdf.min.js");
-  pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
-  const task = pdfjs.getDocument({ data: bytes });
+  let task;
   try {
+    const pdfjs = await import("/pdf.min.js");
+    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+    task = pdfjs.getDocument({ data: bytes });
     const pdf = await task.promise;
     if (pdf.numPages > 30) throw new Error("PDF 超过 30 页，请拆分后检查");
     const pages = [];
@@ -50,6 +51,6 @@ async function readPdf(bytes) {
     return pages.join("\n");
   } catch (error) {
     if (error.message?.includes("超过")) throw error;
-    throw new Error("PDF 无法读取；请检查文件是否加密或为扫描件");
-  } finally { await task.destroy(); }
+    throw new Error("浏览器无法读取 PDF 文字，请检查文件是否加密，或在材料提交页面直接上传原件");
+  } finally { await task?.destroy(); }
 }

@@ -3,6 +3,7 @@ import officialForms from "../official-forms.json";
 import { extractReviewText } from "./file-text.js";
 import { extractRosterText } from "./roster.js";
 import { deriveVerifier } from "./pbkdf2.js";
+import { fileExtension, materialAccept, maxBatchBytes, maxFileBytes, normalizedAttachment, officeAccept, uploadType } from "../upload-types.js";
 
 const root = document.getElementById("app");
 const navigation = document.getElementById("navigation");
@@ -98,12 +99,23 @@ const busy = form => {
   return () => { if (submit) submit.disabled = false; };
 };
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: "same-origin",
-    headers: options.body instanceof FormData ? {} : options.body ? { "content-type": "application/json" } : {},
-    ...options
-  });
-  const data = await response.json();
+  const multipart = options.body instanceof FormData;
+  let response;
+  try {
+    response = await fetch(path, {
+      credentials: "same-origin",
+      headers: multipart ? {} : options.body ? { "content-type": "application/json" } : {},
+      ...options
+    });
+  } catch (error) {
+    if (!multipart) throw error;
+    throw new Error("网络中断，未能确认文件是否上传。请先查看提交记录，再重试。");
+  }
+  const data = await response.json().catch(() => null);
+  if (!data) {
+    if (response.status === 413) throw new Error("附件太大，请缩小文件或分批上传。");
+    throw new Error("服务器暂时无法确认请求结果，请稍后刷新查看。");
+  }
   if (!response.ok || !data.ok) {
     const error = new Error(data.error || "请求失败");
     if (data.code) error.code = data.code;
@@ -359,9 +371,15 @@ function mentorPage() {
     const acceptFile = file => {
       if (!file || (Array.isArray(file) && !file.length)) return;
       if (staffAgent) {
-        const incoming = Array.isArray(file) ? file : [file];
-        if (incoming.length > 10 || incoming.some(item => !/\.(doc|docx|xls|xlsx|pdf|csv|txt)$/i.test(item.name) || item.size < 1 || item.size > 10 * 1024 * 1024)) {
-          clearFile(); appendMessage({ role: "assistant", content: "一次最多选择 10 份文件，每份不超过 10 MB；支持 DOC、DOCX、XLS、XLSX、PDF、CSV、TXT。" }); return;
+        const incoming = (Array.isArray(file) ? file : [file]).map(item => normalizedAttachment(item, true));
+        if (incoming.length > 10 || incoming.some(item => (!uploadType(item.name, true) && !/\.(csv|txt)$/i.test(item.name)) || item.size < 1 || item.size > maxFileBytes)) {
+          clearFile(); appendMessage({ role: "assistant", content: "每次最多选择 10 份文件，每份最大 10 MB。支持 Word、PDF、图片及 Excel、CSV、TXT 名单。" }); return;
+        }
+        if (incoming.reduce((total, item) => total + item.size, 0) > maxBatchBytes) {
+          clearFile(); appendMessage({ role: "assistant", content: "这批附件超过 30 MB，请分批发送。" }); return;
+        }
+        if (new Set(incoming.map(item => item.name)).size !== incoming.length) {
+          clearFile(); appendMessage({ role: "assistant", content: "有多份附件同名，请改名或分批发送。" }); return;
         }
         selectedFiles = incoming; textarea.required = false; attachment.hidden = false;
         attachment.replaceChildren(make("span", { text: incoming.map(item => item.name).join("、") }), button("移除", clearFile, "mentor-remove-attachment"));
@@ -431,7 +449,7 @@ function mentorPage() {
     const header = make("header", { className: "mentor-topbar" }, make("div", { className: "mentor-topbar-left" }, menu, newChat()));
     if (staffAgent) {
       fileInput.multiple = true;
-      fileInput.accept = ".doc,.docx,.xls,.xlsx,.pdf,.csv,.txt";
+      fileInput.accept = officeAccept;
       fileInput.setAttribute("aria-label", "选择办公任务文件");
       attach.setAttribute("aria-label", "选择办公任务文件");
       attach.title = "选择最多 10 份文件";
@@ -461,7 +479,12 @@ function mentorPage() {
           (/名单|登记|注册|添加辅导员|删除|群发|收件人|站内信|推进|审阅|更新|修改|导入/.test(task) ||
           files.every(file => /\.(xlsx|csv|txt)$/i.test(file.name)) && !/上传|归档|资料下载/.test(task))) {
           for (const file of files) {
-            if (/\.(xlsx|csv|txt|docx|pdf)$/i.test(file.name)) documentText += "\n文件：" + file.name + "\n" + (await extractRosterText(file)).slice(0, 10000);
+            if (!/\.(xlsx|csv|txt|docx|pdf)$/i.test(file.name)) continue;
+            try {
+              documentText += "\n文件：" + file.name + "\n" + (await extractRosterText(file)).slice(0, 10000);
+            } catch {
+              documentText += "\n未能从附件「" + file.name + "」提取文字。仍可按文件名安排归档；如需提取名单，请提供可搜索的文档或粘贴文字。";
+            }
           }
         }
         const result = await post("/api/office/plan", { question, documentText: documentText.slice(0, 25000), files: files.map(file => ({ name: file.name })), history: officeHistory.slice(-6) });
@@ -663,7 +686,7 @@ async function inspectDocx(file) {
   return results;
 }
 function checkPage() {
-  const shell = make("div", { className: "view view-check" }, pageHead("STUDENT / SUBMISSION", "材料提交", "先在浏览器检查 DOCX 格式，再提交给辅导员。"), notice("正在读取材料列表…"));
+  const shell = make("div", { className: "view view-check" }, pageHead("STUDENT / SUBMISSION", "材料提交", "上传 Word、PDF 或图片，提交后可在材料记录中查看。"), notice("正在读取材料列表…"));
   (async () => { try {
     const data = await api("/api/materials");
     const materialChoices = data.materials.map(x => [x.id, x.name]);
@@ -671,34 +694,37 @@ function checkPage() {
       select("选择材料", "materialId", materialChoices),
       make("label", { className: "upload-drop" },
         make("span", { className: "upload-drop-icon", "aria-hidden": "true", text: "↑" }),
-        make("strong", { text: "选择 DOCX 文件" }),
-        make("span", { className: "small", text: "点击选择 · 仅 DOCX · 最大 10 MB · 上传后存入私有空间" }),
-        make("input", { name: "docx", type: "file", accept: ".docx", required: "", "aria-label": "材料文件" })),
+        make("strong", { text: "选择 Word、PDF 或图片" }),
+        make("span", { className: "small", text: "点击选择 · 每份最大 10 MB" }),
+        make("input", { name: "file", type: "file", accept: materialAccept, required: "", "aria-label": "材料文件" })),
       make("button", { className: "btn", type: "submit", text: "检查并提交" }));
     const output = panel(make("div", { className: "panel-head" }, make("h2", { text: "质检结果" })),
-      make("div", { className: "empty-state" }, make("strong", { text: "等待检查" }), "选择材料并上传 DOCX，结果将在这里显示。"));
+      make("div", { className: "empty-state" }, make("strong", { text: "等待检查" }), "选择文件后，提交结果将在这里显示。"));
     form.addEventListener("submit", async event => {
       event.preventDefault();
       const release = busy(form);
       try {
-        const file = form.querySelector("[name=docx]").files[0];
-        if (!file || file.size > 10 * 1024 * 1024 || !/\.docx$/i.test(file.name)) throw new Error("请选择不超过 10 MB 的 DOCX");
-        const results = await inspectDocx(file);
+        const selected = form.elements.file.files[0];
+        const file = selected && normalizedAttachment(selected);
+        if (!file || file.size < 1 || file.size > maxFileBytes || !uploadType(file.name)) throw new Error("请选择不超过 10 MB 的 Word、PDF 或图片");
+        const inspected = fileExtension(file.name) === "docx";
+        const results = inspected ? await inspectDocx(file) : [];
         const data = new FormData(form);
+        data.set("file", file);
         data.set("results", JSON.stringify(results));
         const saved = await api("/api/checks", { method: "POST", body: data });
-        output.replaceChildren(make("div", { className: "panel-head" }, make("h2", { text: "质检结果" }), make("span", { className: "small", text: results.length + " 项结果" })),
-          make("div", { className: "results-list" },
+        output.replaceChildren(make("div", { className: "panel-head" }, make("h2", { text: inspected ? "质检结果" : "提交结果" }), inspected ? make("span", { className: "small", text: results.length + " 项结果" }) : null),
+          inspected ? make("div", { className: "results-list" },
             results.length ? results.map(r => make("div", { className: "result-row" }, make("strong", { text: r.message }), p(r.suggestion))) :
-              [make("div", { className: "result-row" }, make("strong", { text: "未发现格式问题" }), p("已完成当前规则检查。"))]),
-          notice("文件已提交，辅导员可在后台下载。格式检查在你的浏览器中完成。", "success"),
+              [make("div", { className: "result-row" }, make("strong", { text: "未发现格式问题" }), p("已完成当前规则检查。"))]) : null,
+          notice(inspected ? "文件已提交，DOCX 格式检查已完成。" : "文件已提交，等待人工审阅。", "success"),
           make("a", { className: "text-link", href: "/api/checks/" + saved.id + "/file", text: "下载已保存的材料 →" }));
       } catch (error) { feedback(form, error.message); }
       finally { release(); }
     });
-    shell.replaceChildren(pageHead("STUDENT / SUBMISSION", "材料提交", "先在浏览器检查 DOCX 格式，再提交给辅导员。"),
+    shell.replaceChildren(pageHead("STUDENT / SUBMISSION", "材料提交", "上传 Word、PDF 或图片，提交后可在材料记录中查看。"),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "上传并提交材料" })),
-        p("检查标题居中、正文字体字号与文末落款。"), form), output);
+        p("DOCX 会检查标题、正文和落款格式。旧版 Word、PDF 和图片提交后由人工审阅。"), form), output);
   } catch (error) { shell.replaceChildren(pageHead("STUDENT / SUBMISSION", "材料提交"), notice(error.message, "error")); } })();
   return shell;
 }
@@ -755,17 +781,19 @@ function formsPage() {
     const upload = isStaffUser() ? make("form", { className: "form-grid form-upload" },
       select("所属阶段", "stageSlug", data.stages.map(stage => [stage.slug, stage.name])),
       field("表格名称", "title"),
-      field("文件（DOC / DOCX / XLS / XLSX / PDF，最大 10 MB）", "file", "file"),
+      field("文件（Word、Excel、PDF 或图片，最大 10 MB）", "file", "file"),
       make("button", { className: "btn", type: "submit", text: "上传院系表格" })) : null;
     if (upload) {
-      upload.querySelector("[name=file]").setAttribute("accept", ".doc,.docx,.xls,.xlsx,.pdf");
+      upload.querySelector("[name=file]").setAttribute("accept", materialAccept + ",.xls,.xlsx");
       upload.addEventListener("submit", async event => {
         event.preventDefault();
         const release = busy(upload);
         try {
           const file = upload.querySelector("[name=file]").files[0];
           if (!file || file.size > 10 * 1024 * 1024) throw new Error("请选择不超过 10 MB 的表格文件");
-          await api("/api/forms", { method: "POST", body: new FormData(upload) });
+          const body = new FormData(upload);
+          body.set("file", normalizedAttachment(file, true));
+          await api("/api/forms", { method: "POST", body });
           render();
         } catch (error) { feedback(upload, error.message); }
         finally { release(); }

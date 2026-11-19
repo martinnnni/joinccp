@@ -1,3 +1,4 @@
+import { matchesUploadType, maxBatchBytes, maxFileBytes, uploadType } from "./upload-types.js";
 import { retrieve, publicSources, modelMessages, advisoryMessages, reviewStandards, knowledgeCount } from "./rag.js";
 import { mentorConfig } from "./mentor-config.js";
 import { classifyIntent, decideMentorRoute, chitchatMessages, isIdentityQuestion } from "./mentor-routing.js";
@@ -425,28 +426,28 @@ export async function checkRoutes(request, env, path, user) {
   if (path === "/api/checks" && request.method === "POST") {
     assert(user.role === "student", "仅学生可上传材料", 403);
     const form = await request.formData();
-    const file = form.get("docx"), materialId = id(form.get("materialId"));
-    assert(file && typeof file === "object" && typeof file.stream === "function", "请选择 DOCX 文件");
-    assert(/\.docx$/i.test(file.name) && file.size > 0 && file.size <= 10 * 1024 * 1024, "仅支持不超过 10 MB 的 DOCX");
-    const signature = new Uint8Array(await file.slice(0, 4).arrayBuffer());
-    assert(signature[0] === 0x50 && signature[1] === 0x4b, "文件格式无效");
+    const file = form.get("file") ?? form.get("docx"), materialId = id(form.get("materialId"));
+    assert(file && typeof file.arrayBuffer === "function", "请选择 Word、PDF 或图片");
+    const filename = clean(file.name, 150), type = uploadType(filename);
+    assert(type && file.size > 0 && file.size <= maxFileBytes, "仅支持不超过 10 MB 的 Word、PDF 或图片");
+    assert(await matchesUploadType(file, type), "文件内容与扩展名不符");
     const material = await env.DB.prepare("SELECT id FROM materials WHERE id=?").bind(materialId).first();
     assert(material, "材料类型不存在", 404);
     let results;
     try { results = validateResults(JSON.parse(String(form.get("results") || "[]"))); }
     catch { throw new HttpError(400, "质检结果无效"); }
-    const key = "checks/" + user.id + "/" + randomHex(16) + ".docx";
-    await env.FILES.put(key, file.stream(), { httpMetadata: { contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" } });
+    const key = "checks/" + user.id + "/" + randomHex(16) + "." + type.ext;
+    await env.FILES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: type.mime } });
     let checkId = null;
     try {
       const row = await env.DB.prepare("INSERT INTO checks(student_id,material_id,r2_key,filename) VALUES(?,?,?,?)")
-        .bind(user.id, materialId, key, clean(file.name, 150)).run();
+        .bind(user.id, materialId, key, filename).run();
       checkId = row.meta.last_row_id;
       await env.DB.batch([
         ...results.map(result => env.DB.prepare("INSERT INTO check_results(check_id,kind,code,message,severity,suggestion) VALUES(?,?,?,?,?,?)")
           .bind(checkId, result.kind, result.code, result.message, result.severity, result.suggestion)),
         env.DB.prepare("INSERT INTO material_records(student_id,material_id,status,r2_key,filename,submitted_at) VALUES(?,?,'已交',?,?,?) ON CONFLICT(student_id,material_id) DO UPDATE SET status='已交',r2_key=excluded.r2_key,filename=excluded.filename,submitted_at=excluded.submitted_at")
-          .bind(user.id, materialId, key, clean(file.name, 150), iso())
+          .bind(user.id, materialId, key, filename, iso())
       ]);
       return json({ ok: true, id: checkId, results }, 201);
     } catch (error) {
@@ -474,19 +475,11 @@ export async function checkRoutes(request, env, path, user) {
     }
     const object = await env.FILES.get(row.r2_key);
     assert(object, "文件不存在", 404);
-    return fileResponse(object, row.filename, formType(row.filename)?.mime || "application/octet-stream");
+    return fileResponse(object, row.filename, uploadType(row.filename, true)?.mime || "application/octet-stream");
   }
   return null;
 }
 
-const formTypes = {
-  doc: { mime: "application/msword", magic: [0xd0, 0xcf, 0x11, 0xe0] },
-  docx: { mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", magic: [0x50, 0x4b] },
-  xls: { mime: "application/vnd.ms-excel", magic: [0xd0, 0xcf, 0x11, 0xe0] },
-  xlsx: { mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", magic: [0x50, 0x4b] },
-  pdf: { mime: "application/pdf", magic: [0x25, 0x50, 0x44, 0x46] }
-};
-function formType(filename) { return formTypes[/\.([a-z0-9]+)$/i.exec(filename)?.[1]?.toLowerCase()] || null; }
 function fileResponse(object, filename, mime) {
   return new Response(object.body, { headers: {
     "content-type": mime,
@@ -509,15 +502,14 @@ export async function formRoutes(request, env, path, user) {
     const stage = await env.DB.prepare("SELECT slug FROM stages WHERE slug=?").bind(stageSlug).first();
     assert(stage && title, "请选择阶段并填写表格名称");
     const file = form.get("file");
-    assert(file && typeof file.stream === "function", "请选择表格文件");
-    const filename = clean(file.name, 150), type = formType(filename);
-    assert(type && file.size > 0 && file.size <= 10 * 1024 * 1024, "仅支持不超过 10 MB 的 DOC、DOCX、XLS、XLSX 或 PDF");
-    const signature = new Uint8Array(await file.slice(0, 4).arrayBuffer());
-    assert(type.magic.every((value, index) => signature[index] === value), "文件格式与扩展名不符");
+    assert(file && typeof file.arrayBuffer === "function", "请选择表格文件");
+    const filename = clean(file.name, 150), type = uploadType(filename, true);
+    assert(type && file.size > 0 && file.size <= maxFileBytes, "仅支持不超过 10 MB 的 Word、Excel、PDF 或图片");
+    assert(await matchesUploadType(file, type), "文件内容与扩展名不符");
     const departmentId = user.role === "admin" ? null : user.department_id;
     assert(user.role === "admin" || departmentId, "辅导员尚未分配院系", 403);
     const key = "forms/" + (departmentId || "global") + "/" + randomHex(16) + "." + filename.split(".").at(-1).toLowerCase();
-    await env.FILES.put(key, file.stream(), { httpMetadata: { contentType: type.mime } });
+    await env.FILES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: type.mime } });
     try {
       const saved = await env.DB.prepare("INSERT INTO form_templates(stage_slug,department_id,title,filename,r2_key,uploaded_by) VALUES(?,?,?,?,?,?)")
         .bind(stageSlug, departmentId, title, filename, key, user.id).run();
@@ -531,7 +523,7 @@ export async function formRoutes(request, env, path, user) {
     assert(user.role === "admin" || row.department_id === null || row.department_id === user.department_id, "无权下载此表格", 403);
     const object = await env.FILES.get(row.r2_key);
     assert(object, "文件不存在", 404);
-    return fileResponse(object, row.filename, formType(row.filename)?.mime || "application/octet-stream");
+    return fileResponse(object, row.filename, uploadType(row.filename, true)?.mime || "application/octet-stream");
   }
   return null;
 }
@@ -1098,8 +1090,7 @@ async function normalizeOfficeAction(env, user, action, files) {
   for (const item of action.files) {
     const filename = clean(item.filename, 150);
     assert(names.includes(filename), "缺少文件：" + filename);
-    const fileType = formType(filename);
-    assert(fileType && (type === "upload_forms" || ["docx", "pdf"].includes(filename.split(".").at(-1).toLowerCase())), "文件类型不支持：" + filename);
+    assert(uploadType(filename, type === "upload_forms"), "文件类型不支持：" + filename);
     if (type === "upload_forms") {
       const stage = await env.DB.prepare("SELECT slug,name FROM stages WHERE slug=?").bind(clean(item.stageSlug, 80)).first();
       assert(stage, "阶段不存在：" + clean(item.stageSlug, 80));
@@ -1128,6 +1119,9 @@ export async function officeRoutes(request, env, path, user) {
     assert(question || documentText || files.length, "请描述任务或上传文件");
     if (isIdentityQuestion(question)) return json({ ok: true, answer: "我是中国民航大学理学院独立开发的党员发展辅助系统。作为办公助理，我可以帮你整理和执行已确认的站内任务。", plan: null });
     if (isCurrentTimeQuestion(question)) return json({ ok: true, answer: getCurrentTime(), plan: null });
+    if (files.length && !question && !history.some(item => item?.role === "user" && item.content?.trim?.())) {
+      return json({ ok: true, answer: "附件已选好。请告诉我要怎样处理，例如归档到某位学生的材料，或放入某个阶段的资料下载区。", plan: null });
+    }
     assert(env.DEEPSEEK_API_KEY, "办公助理尚未配置 AI 服务", 503);
     assert(files.length <= 10, "一次最多上传 10 个文件");
     const catalog = {
@@ -1210,14 +1204,15 @@ export async function officeRoutes(request, env, path, user) {
         assert(multipart, "请附上要上传的文件");
         const uploads = data.getAll("file");
         assert(uploads.length === plan.rows.length, "文件数量与预览不一致");
+        assert(uploads.every(file => typeof file?.arrayBuffer === "function") &&
+          uploads.reduce((total, file) => total + file.size, 0) <= maxBatchBytes, "这批附件须为文件，且总大小不能超过 30 MB");
         const byName = new Map(uploads.map(file => [clean(file.name, 150), file]));
         assert(byName.size === uploads.length, "文件名重复");
         const prepared = [];
         for (const item of plan.rows) {
-          const file = byName.get(item.filename), type = formType(item.filename);
-          assert(file && type && file.size > 0 && file.size <= 10 * 1024 * 1024, "文件缺失或超过 10 MB：" + item.filename);
-          const signature = new Uint8Array(await file.slice(0, 4).arrayBuffer());
-          assert(type.magic.every((byte, index) => byte === signature[index]), "文件格式与扩展名不符：" + item.filename);
+          const file = byName.get(item.filename), type = uploadType(item.filename, plan.type === "upload_forms");
+          assert(file && type && file.size > 0 && file.size <= maxFileBytes, "文件缺失或超过 10 MB：" + item.filename);
+          assert(await matchesUploadType(file, type), "文件格式与扩展名不符：" + item.filename);
           if (plan.type === "upload_student_files") await targetStudent(env, user, item.studentId);
           const key = plan.type === "upload_forms" ? "forms/" + (user.role === "admin" ? "global" : user.department_id) + "/" + randomHex(16) + "." + item.filename.split(".").at(-1).toLowerCase()
             : "checks/" + item.studentId + "/" + randomHex(16) + "." + item.filename.split(".").at(-1).toLowerCase();
@@ -1225,7 +1220,7 @@ export async function officeRoutes(request, env, path, user) {
         }
         const uploaded = [];
         try {
-          for (const entry of prepared) { await env.FILES.put(entry.key, entry.file.stream(), { httpMetadata: { contentType: entry.type.mime } }); uploaded.push(entry.key); }
+          for (const entry of prepared) { await env.FILES.put(entry.key, await entry.file.arrayBuffer(), { httpMetadata: { contentType: entry.type.mime } }); uploaded.push(entry.key); }
           if (plan.type === "upload_forms") await env.DB.batch(prepared.map(entry => env.DB.prepare("INSERT INTO form_templates(stage_slug,department_id,title,filename,r2_key,uploaded_by) VALUES(?,?,?,?,?,?)")
             .bind(entry.item.stageSlug, user.role === "admin" ? null : user.department_id, entry.item.title, entry.item.filename, entry.key, user.id)));
           else {
