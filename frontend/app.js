@@ -619,7 +619,28 @@ function mentorPage() {
         loading.remove();
         if (status.enabled || file) {
           mentorHistory.push({ role: "user", content: displayQuestion }, { role: "assistant", content: result.answer, route: result.route, sources: result.sources || [] });
-          focusReplyTop(appendMessage({ role: "assistant", content: result.answer, sources: result.sources }));
+          const row = appendMessage({ role: "assistant", content: "", sources: result.sources });
+          const msg = row.querySelector(".mentor-message");
+          focusReplyTop(row);
+          // 先按 markdown 渲染成最终排版，再逐字回填渲染后的文本，避免用户看到原始 markdown 符号
+          msg.innerHTML = renderMarkdown(result.answer);
+          const pending = [];
+          const walker = document.createTreeWalker(msg, NodeFilter.SHOW_TEXT);
+          let node;
+          while ((node = walker.nextNode())) {
+            if (node.nodeValue && node.nodeValue.length) { pending.push({ node, text: node.nodeValue }); node.nodeValue = ""; }
+          }
+          let tick = 0;
+          for (const item of pending) {
+            for (const ch of item.text) {
+              if (!alive()) return;
+              item.node.nodeValue += ch;
+              if (tick % 8 === 0) focusReplyTop(row);
+              tick++;
+              await new Promise(r => setTimeout(r, 14));
+            }
+          }
+          focusReplyTop(row);
         } else {
           mentorHistory.push({ role: "user", content: displayQuestion });
           focusReplyTop(appendMessage({ role: "assistant", content: result.sources?.length ? "找到以下相关资料：" : "目前没有找到相关资料，请换个更具体的问法。", sources: result.sources }));
