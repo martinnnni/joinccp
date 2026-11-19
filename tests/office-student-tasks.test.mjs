@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { officeRoutes } from "../worker.js";
 
-const counselor = { id: 8, role: "counselor", department_id: 2 };
+const counselor = { id: 8, role: "counselor", major_id: 2 };
 const admin = { id: 1, role: "admin" };
 const migrations = new URL("../migrations/", import.meta.url);
 
@@ -45,9 +45,11 @@ function setup(t) {
   };
   db.exec(`
     INSERT INTO departments(id,name) VALUES(2,'甲院'),(3,'乙院');
-    INSERT INTO users(id,username,password_salt,password_verifier,role,department_id) VALUES
-      (1,'admin-test','','','admin',NULL),(8,'staff-test','','','counselor',2),
-      (11,'100011','','','student',2),(12,'100012','','','student',2),(13,'100013','','','student',3);
+    INSERT INTO majors(id,college_id,name) VALUES(2,2,'甲专业'),(3,3,'乙专业');
+    INSERT INTO classes(id,major_id,name) VALUES(2,2,'甲一班'),(3,3,'乙一班');
+    INSERT INTO users(id,username,password_salt,password_verifier,role,department_id,major_id,class_id) VALUES
+      (1,'admin-test','','','admin',NULL,NULL,NULL),(8,'staff-test','','','counselor',2,2,NULL),
+      (11,'100011','','','student',2,NULL,2),(12,'100012','','','student',2,NULL,2),(13,'100013','','','student',3,NULL,3);
     INSERT INTO profiles(user_id,name,student_no,grade) VALUES
       (11,'测试甲','100011','2026'),(12,'测试乙','100012','2026'),(13,'测试丙','100013','2026');
   `);
@@ -80,10 +82,10 @@ test("站内信预览确定收件人，确认只发送一次，执行前复核�
   assert.ok(first.preview.includes(action.content));
   assert.equal(db.prepare("SELECT count(*) AS n FROM notifications").get().n, 0);
   await assert.rejects(execute(first, admin), { status: 409 });
-  db.exec("UPDATE users SET department_id=3 WHERE id=12");
+  db.exec("UPDATE users SET class_id=3 WHERE id=12");
   await assert.rejects(execute(first), { status: 409 });
   assert.equal(db.prepare("SELECT count(*) AS n FROM notifications").get().n, 0);
-  db.exec("UPDATE users SET department_id=2 WHERE id=12; UPDATE users SET department_id=2 WHERE id=13");
+  db.exec("UPDATE users SET class_id=2 WHERE id=12; UPDATE users SET class_id=2 WHERE id=13");
   assert.equal((await (await execute(first)).json()).count, 2);
   await assert.rejects(execute(first), { status: 409 });
   assert.deepEqual(db.prepare("SELECT student_id FROM notifications ORDER BY id").all().map(row => row.student_id), [11, 12]);
@@ -104,20 +106,23 @@ test("删除只处理已预览的名单，跨院系名单整批拒绝，并清�
   assert.deepEqual(deleted, ["checks/test/a.docx"]);
 });
 
-test("管理员新增院系和生成邀请码，辅导员仅能查询本院学生", async t => {
+test("管理员新增学院和生成邀请码，辅导员仅能查询本专业学生", async t => {
   const { db, plan, execute } = setup(t);
   const listing = await plan({ type: "list_students" });
   assert.match(listing.answer, /测试甲.*申请入党/);
   assert.doesNotMatch(listing.answer, /测试丙/);
   assert.equal(listing.plan, null);
-  assert.equal((await plan({ type: "create_department", name: "新院系" })).plan, null);
-  const department = (await plan({ type: "create_department", name: "新院系" }, admin)).plan;
-  await execute(department, admin);
-  const { id } = db.prepare("SELECT id FROM departments WHERE name='新院系'").get();
-  const invites = (await plan({ type: "create_invites", departmentId: id, count: 2 }, admin)).plan;
+  assert.equal((await plan({ type: "create_department", name: "新学院" })).plan, null);
+  const college = (await plan({ type: "create_department", name: "新学院" }, admin)).plan;
+  await execute(college, admin);
+  const { id: collegeId } = db.prepare("SELECT id FROM departments WHERE name='新学院'").get();
+  const major = (await plan({ type: "create_major", collegeId, name: "新专业" }, admin)).plan;
+  await execute(major, admin);
+  const { id: majorId } = db.prepare("SELECT id FROM majors WHERE name='新专业'").get();
+  const invites = (await plan({ type: "create_invites", majorId, count: 2 }, admin)).plan;
   const output = await (await execute(invites, admin)).json();
   assert.equal(output.count, 2);
-  assert.equal(db.prepare("SELECT count(*) AS n FROM invites WHERE department_id=? AND role='counselor'").get(id).n, 2);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM invites WHERE major_id=? AND role='counselor'").get(majorId).n, 2);
 });
 
 test("对话确认后推进培养阶段、审阅最新材料并通知学生", async t => {
@@ -127,10 +132,10 @@ test("对话确认后推进培养阶段、审阅最新材料并通知学生", as
   await execute(next);
   assert.equal(db.prepare("SELECT current_stage_slug FROM profiles WHERE user_id=11").get().current_stage_slug, "activist");
   const material = db.prepare("SELECT id,name FROM materials LIMIT 1").get();
-  db.prepare("INSERT INTO checks(student_id,material_id,r2_key,filename) VALUES(11,?,'checks/old.docx','旧版.docx')").run(material.id);
+  db.prepare("INSERT INTO checks(student_id,material_id,r2_key,filename,monitor_approved) VALUES(11,?,'checks/old.docx','旧版.docx',1)").run(material.id);
   const reviewAction = { type: "review_materials", rows: [{ student: "100011", materialName: material.name }], status: "已通过" };
   const first = (await plan(reviewAction)).plan;
-  db.prepare("INSERT INTO checks(student_id,material_id,r2_key,filename) VALUES(11,?,'checks/new.docx','新版.docx')").run(material.id);
+  db.prepare("INSERT INTO checks(student_id,material_id,r2_key,filename,monitor_approved) VALUES(11,?,'checks/new.docx','新版.docx',1)").run(material.id);
   await assert.rejects(execute(first), { status: 409 });
   const pending = await plan({ type: "list_submissions", pendingOnly: true });
   assert.match(pending.answer, /新版\.docx/);

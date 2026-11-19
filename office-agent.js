@@ -1,19 +1,22 @@
 const operations = {
-  register_students: ["{departmentId?,students:[{name,studentNo}]}，管理员必须指定院系", "students", ["departmentId"]],
+  register_students: ["{classId?,students:[{name,studentNo}]}，学生归入指定班级，必须指定班级", "students", ["classId"]],
   update_students: ["{rows:[{student,major?,grade?,phone?,appliedAt?,stageSlug?,nodeSlug?,materialName?,status?}]}，日期 YYYY-MM-DD，状态为 未交/已交/已通过", "rows"],
   upload_forms: ["{files:[{filename,title,stageSlug}]}", "files"],
   upload_student_files: ["{files:[{filename,student,materialName}]}", "files"],
   reset_password: ['{student:"学号或姓名"}', null, ["student"]],
   delete_students: ["{students:[{student}]}，仅在用户明确要求删除账号且给出具体名单时使用，不接受按群体删除", "students"],
-  send_notifications: ["{students:[{student}],title,content}，或 {audience:{departmentId?,stageSlug?,grade?},title,content}。仅当用户明确要求按院系、阶段或年级群发时才用 audience，至少指定一个条件。正文保留用户原意，不猜测日期地点", null, ["students", "audience", "title", "content"]],
+  send_notifications: ["{students:[{student}],title,content}，或 {audience:{classId?,majorId?,stageSlug?,grade?},title,content}。仅当用户明确要求按班级、专业、阶段或年级群发时才用 audience，至少指定一个条件。正文保留用户原意，不猜测日期地点", null, ["students", "audience", "title", "content"]],
   advance_students: ["{students:[{student}]}，推进到下一阶段", "students"],
   review_materials: ["{rows:[{student,materialName}],status,note?}，状态为 已通过/退回修改，退回时必须填写理由。用户明确要求审阅才生成计划，不替用户判断是否通过", "rows", ["status", "note"]],
-  list_students: ["{students:[{student}]} 或 {audience:{departmentId?,stageSlug?,grade?}} 或 {}。用于查看可管理的学生和培养阶段", null, ["students", "audience"]],
+  list_students: ["{students:[{student}]} 或 {audience:{classId?,majorId?,stageSlug?,grade?}} 或 {}。用于查看可管理的学生和培养阶段", null, ["students", "audience"]],
   list_submissions: ["{student?,pendingOnly?}，查看已提交材料，pendingOnly 为布尔值，true 时只看待审阅记录。可指定具体学生", null, ["student", "pendingOnly"]],
-  register_counselors: ["{departmentId,counselors:[{name,username}]}", "counselors", ["departmentId"], true],
+  register_counselors: ["{majorId,counselors:[{name,username}]}", "counselors", ["majorId"], true],
   delete_counselors: ["{counselors:[{username}]}，仅在用户明确要求删除时规划，必须提供确切用户名", "counselors", [], true],
-  create_invites: ["{departmentId,count}，为指定院系生成辅导员邀请码", null, ["departmentId", "count"], true],
-  create_department: ["{name}，新增院系", null, ["name"], true]
+  create_invites: ["{majorId,count}，为指定专业生成辅导员邀请码", null, ["majorId", "count"], true],
+  create_department: ["{name}，新增学院", null, ["name"], true],
+  create_major: ["{collegeId,name}，新增专业", null, ["collegeId", "name"], true],
+  create_class: ["{majorId,name}，新增班级", null, ["majorId", "name"]],
+  set_monitor: ["{classId,student}，将该学生设为班长", null, ["classId", "student"]]
 };
 
 export const OFFICE_ACTIONS = new Set(Object.keys(operations));

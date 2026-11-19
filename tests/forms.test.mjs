@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { adminRoutes, checkRoutes, formRoutes } from "../worker.js";
 
-const student = { id: 7, role: "student", department_id: 2 };
-const counselor = { id: 8, role: "counselor", department_id: 2 };
+const student = { id: 7, role: "student", department_id: 2, class_id: 2 };
+const counselor = { id: 8, role: "counselor", department_id: 2, major_id: 2 };
 const foreignForm = { department_id: 3, filename: "表格.pdf", r2_key: "forms/3/sample.pdf" };
 
 function fakeEnv({ form = foreignForm, studentDepartment = 3 } = {}) {
@@ -16,8 +16,8 @@ function fakeEnv({ form = foreignForm, studentDepartment = 3 } = {}) {
         async first() {
           if (sql.includes("FROM form_templates WHERE id=")) return form;
           if (sql.includes("FROM stages WHERE slug=")) return { slug: args[0] };
-          if (sql.includes("FROM users u JOIN profiles")) return { id: args[0], department_id: studentDepartment };
-          if (sql.includes("FROM users WHERE id=")) return { department_id: studentDepartment };
+          if (sql.includes("FROM users u JOIN profiles")) return { id: args[0], class_id: 2, major_id: studentDepartment, name: "测试学生" };
+          if (sql.includes("FROM users u LEFT JOIN classes")) return { major_id: studentDepartment };
           return null;
         },
         async all() {
@@ -87,6 +87,7 @@ test("学生提交 DOCX 后材料状态写为已交", async () => {
           sql, params: [],
           bind(...params) { this.params = params; return this; },
           async first() { return { id: 4 }; },
+          async all() { return { results: [] }; },
           async run() { return { meta: { last_row_id: 12 } }; }
         };
         return statement;

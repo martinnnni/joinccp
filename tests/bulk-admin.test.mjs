@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { adminRoutes } from "../worker.js";
 
-const counselor = { id: 8, role: "counselor", department_id: 2 };
-const admin = { id: 1, role: "admin", department_id: null };
+const counselor = { id: 8, role: "counselor", major_id: 2 };
+const admin = { id: 1, role: "admin" };
 const path = action => "/api/admin/" + action;
 const request = (action, data) => new Request("https://example.test" + path(action), {
   method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data)
@@ -18,16 +18,16 @@ function fakeEnv({ foreign = false, review = false } = {}) {
           sql, params: [],
           bind(...params) { this.params = params; return this; },
           async first() {
-            if (sql.includes("FROM users u JOIN profiles")) return { id: this.params[0], department_id: foreign ? 3 : 2, name: "测试学生", current_stage_slug: "application" };
-            if (sql.includes("FROM users WHERE id=")) return { department_id: foreign ? 3 : 2 };
+            if (sql.includes("FROM users u JOIN profiles")) return { id: this.params[0], class_id: 2, major_id: foreign ? 3 : 2, class_name: "计科2301班", name: "测试学生", current_stage_slug: "application" };
+            if (sql.includes("FROM users u LEFT JOIN classes")) return { major_id: foreign ? 3 : 2 };
             if (sql.includes("FROM nodes WHERE stage_slug=")) return { slug: "activist-first" };
             if (sql.includes("FROM checks WHERE student_id=")) return { id: 12 };
-            if (sql.includes("FROM departments WHERE id=")) return { id: 2 };
+            if (sql.includes("FROM majors WHERE id=")) return { id: 2, college_id: 1 };
             return null;
           },
           async all() {
             if (sql.includes("FROM stages ORDER BY")) return { results: [{ slug: "application", name: "申请入党" }, { slug: "activist", name: "积极分子" }] };
-            if (sql.includes("FROM checks c JOIN users")) return { results: [{ id: 12, student_id: 7, material_id: 4, department_id: foreign ? 3 : 2, review_status: "待审阅", filename: "申请书.docx", material_name: "入党申请书" }] };
+            if (sql.includes("FROM checks c JOIN users")) return { results: [{ id: 12, student_id: 7, material_id: 4, major_id: foreign ? 3 : 2, monitor_approved: 1, review_status: "待审阅", filename: "申请书.docx", material_name: "入党申请书" }] };
             if (sql.includes("SELECT r2_key FROM checks")) return { results: [{ r2_key: "checks/7/one.docx" }] };
             return { results: [] };
           }
@@ -78,13 +78,13 @@ test("批量审阅同步材料状态并发送结果通知", async () => {
 test("管理员可批量生成辅导员邀请码，辅导员不可邀请", async () => {
   const { env, batches } = fakeEnv();
   const action = "invites";
-  await assert.rejects(adminRoutes(request(action, { departmentId: 2, role: "counselor", count: 3 }), env, path(action), counselor), { status: 403 });
-  const response = await adminRoutes(request(action, { departmentId: 2, role: "counselor", count: 3 }), env, path(action), admin);
+  await assert.rejects(adminRoutes(request(action, { majorId: 2, role: "counselor", count: 3 }), env, path(action), counselor), { status: 403 });
+  const response = await adminRoutes(request(action, { majorId: 2, role: "counselor", count: 3 }), env, path(action), admin);
   const data = await response.json();
   assert.equal(data.codes.length, 3);
   assert.equal(new Set(data.codes).size, 3);
   assert.equal(batches[0].length, 3);
-  await assert.rejects(adminRoutes(request(action, { departmentId: 2, role: "student" }), env, path(action), admin), { status: 400 });
+  await assert.rejects(adminRoutes(request(action, { majorId: 2, role: "student" }), env, path(action), admin), { status: 400 });
 });
 
 test("批量删除清理关联数据与私有文件", async () => {

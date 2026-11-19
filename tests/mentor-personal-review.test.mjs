@@ -5,7 +5,7 @@ import { retrieve, reviewStandards } from "../rag.js";
 import { parseReview } from "../mentor-review.js";
 import { mentorRoutes } from "../worker.js";
 
-const student = { id: 7, role: "student", name: "张同学", student_no: "20260001", current_stage_slug: "application", current_node_slug: "apply" };
+const student = { id: 7, role: "student", name: "张同学", student_no: "20260001", current_stage_slug: "application", current_node_slug: "apply", college_name: "理学院", major_name: "计算机科学与技术", class_name: "计科2301班" };
 const rows = [
   { name: "入党申请书", stage_slug: "application", stage_name: "申请入党", status: "已交", r2_key: "private-file" },
   { name: "入党申请人登记表", stage_slug: "application", stage_name: "申请入党", status: null, r2_key: null },
@@ -119,7 +119,6 @@ test("我是谁：未登录答不知道，登录后答 SQL 档案，英文提问
   const env = { DEEPSEEK_API_KEY: "test-key", DB: { prepare(sql) {
     return { bind() { return this; },
       async first() {
-        if (sql.includes("departments")) return { name: "理学院" };
         if (sql.includes("stages")) return { name: "申请入党" };
         if (sql.includes("nodes")) return { name: "提出入党申请" };
         return null;

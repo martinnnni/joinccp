@@ -7,7 +7,7 @@ import { officeRoutes } from "../worker.js";
 const request = (path, data) => new Request("https://example.test" + path, {
   method: "POST", headers: { origin: "https://example.test", "content-type": "application/json" }, body: JSON.stringify(data)
 });
-const counselor = { id: 8, role: "counselor", department_id: 2 };
+const counselor = { id: 8, role: "counselor", major_id: 2 };
 
 test("办公助理使用独立人格和仅规划不执行的提示词", () => {
   const messages = officeMessages("为张三重置密码", "", [], "counselor", { stages: [], materials: [] });
@@ -16,8 +16,8 @@ test("办公助理使用独立人格和仅规划不执行的提示词", () => {
   assert.match(messages[0].content, /不能猜测学号/);
 });
 
-test("管理员的对话计划保留辅导员名单和指定院系", () => {
-  const action = { type: "register_counselors", departmentId: 2, counselors: [{ name: "张三", username: "teacher1" }] };
+test("管理员的对话计划保留辅导员名单和指定专业", () => {
+  const action = { type: "register_counselors", majorId: 2, counselors: [{ name: "张三", username: "teacher1" }] };
   assert.deepEqual(parseOfficePlan(JSON.stringify({ reply: "请核对名单", action })).action, action);
   assert.match(officeMessages("", "", [], "admin", {})[0].content, /delete_counselors/);
   assert.doesNotMatch(officeMessages("", "", [], "counselor", {})[0].content, /delete_counselors/);
@@ -115,8 +115,8 @@ test("已确认的密码重置只保存校验值并注销该学生会话", async
       sql, params: [], bind(...params) { this.params = params; return this; },
       async first() {
         if (sql.includes("FROM office_plans")) return { id: planId, user_id: 8, status: "pending", expires_at: "2999-01-01T00:00:00.000Z", payload_json: JSON.stringify({ type: "reset_password", studentId: 7, studentNo: "123456789" }) };
-        if (sql.includes("FROM users u JOIN profiles p")) return { id: 7, department_id: 2, student_no: "123456789" };
-        if (sql.includes("FROM users WHERE id=? AND role='student'")) return { department_id: 2 };
+        if (sql.includes("FROM users u JOIN profiles p")) return { id: 7, class_id: 2, major_id: 2, student_no: "123456789" };
+        if (sql.includes("FROM users u LEFT JOIN classes")) return { major_id: 2 };
         return null;
       },
       async run() { operations.push(this); return { meta: { changes: 1 } }; }

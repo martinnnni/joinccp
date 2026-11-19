@@ -292,7 +292,7 @@ function profilePage() {
       make("div", { className: "panel-head" },
         make("h2", { text: profile.name + "的培养档案" }),
         make("span", { className: "badge", text: profile.student_no })),
-      p(data.department + " · " + (profile.major || "专业未填") + " · " + (profile.grade || "年级未填")),
+      p([data.college, data.major, data.className, profile.grade].filter(Boolean).join(" · ") || "学院/专业/班级未填"),
       make("div", { className: "progress-track" }, make("span", { style: "width:" + (stageNumber / 5 * 100) + "%" })),
       make("p", { className: "small", text: "培养流程 · 第 " + stageNumber + " / 5 阶段" }));
     const stats = make("div", { className: "metric-grid" },
@@ -782,7 +782,7 @@ function formsPage() {
       select("所属阶段", "stageSlug", data.stages.map(stage => [stage.slug, stage.name])),
       field("表格名称", "title"),
       field("文件（Word、Excel、PDF 或图片，最大 10 MB）", "file", "file"),
-      make("button", { className: "btn", type: "submit", text: "上传院系表格" })) : null;
+      make("button", { className: "btn", type: "submit", text: "上传学院表格" })) : null;
     if (upload) {
       upload.querySelector("[name=file]").setAttribute("accept", materialAccept + ",.xls,.xlsx");
       upload.addEventListener("submit", async event => {
@@ -802,7 +802,7 @@ function formsPage() {
     const stages = data.stages.map(stage => {
       const uploaded = data.forms.filter(item => item.stage_slug === stage.slug).map(item =>
         make("li", { className: "form-item" },
-          make("div", {}, make("strong", { text: item.title }), make("span", { className: "small", text: item.department_id ? "院系提供 · " + item.filename : "平台提供 · " + item.filename })),
+          make("div", {}, make("strong", { text: item.title }), make("span", { className: "small", text: item.department_id ? "学院提供 · " + item.filename : "平台提供 · " + item.filename })),
           make("a", { className: "secondary", href: "/api/forms/" + item.id + "/file", text: "下载文件 ↓" })));
       const official = officialForms.filter(item => item.stage === stage.slug).map(item => {
         const actions = make("div", { className: "form-actions" },
@@ -814,11 +814,11 @@ function formsPage() {
       return panel(make("div", { className: "panel-head" }, make("h2", { text: stage.position.toString().padStart(2, "0") + " / " + stage.name }),
         make("span", { className: "small", text: uploaded.length + official.length + " 份文件" })),
         uploaded.length + official.length ? make("ul", { className: "form-list" }, uploaded, official) :
-          make("div", { className: "empty-state" }, make("strong", { text: "暂无电子表格" }), "请向辅导员确认纸质材料或等待院系上传。"));
+          make("div", { className: "empty-state" }, make("strong", { text: "暂无电子表格" }), "请向辅导员确认纸质材料或等待学院上传。"));
     });
     shell.replaceChildren(pageHead("LIBRARY / DOWNLOADS", "资料下载", "按培养阶段查找和下载所需表格。"),
       notice("学校组织部公开附件的版本可能早于现行要求；填写前请与辅导员确认使用版本。"),
-      ...(upload ? [panel(make("div", { className: "panel-head" }, make("h2", { text: me.role === "admin" ? "上传全校通用表格" : "上传本院系表格" })), upload)] : []),
+      ...(upload ? [panel(make("div", { className: "panel-head" }, make("h2", { text: me.role === "admin" ? "上传全校通用表格" : "上传本学院表格" })), upload)] : []),
       ...stages);
   } catch (error) { shell.replaceChildren(pageHead("LIBRARY / DOWNLOADS", "资料下载"), notice(error.message, "error")); } })();
   return shell;
@@ -831,98 +831,120 @@ function adminPage() {
   const shell = make("div", { className: "view view-admin" }, pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"), notice("正在读取数据…"));
   (async () => { try {
     const data = await api("/api/admin/dashboard");
-    const departmentChoices = data.departments.map(x => [x.id, x.name]);
-    let needsDepartment = me.role === "admin" && departmentChoices.length === 0;
+    const collegeChoices = data.colleges.map(x => [x.id, x.name]);
+    const majorLabel = id => (data.majors.find(m => m.id === id)?.name || "") + " · " + (data.colleges.find(c => c.id === (data.majors.find(m => m.id === id)?.college_id))?.name || "");
+    const majorChoices = data.majors.map(x => [x.id, majorLabel(x.id)]);
+    const visibleClasses = me.role === "admin" ? data.classes : data.classes.filter(c => c.major_id === me.major_id);
+    const classChoices = visibleClasses.map(x => [x.id, (data.majors.find(m => m.id === x.major_id)?.name || "") + " · " + x.name]);
+    const needCollege = me.role === "admin" && collegeChoices.length === 0;
+    const needMajor = me.role === "admin" && majorChoices.length === 0;
+    const searchForm = make("form", { className: "inline-form" },
+      field("检索学生（姓名或学号）", "q", "text", false, new URLSearchParams(location.search).get("q") || ""),
+      make("button", { className: "btn", type: "submit", text: "检索" }));
+    searchForm.addEventListener("submit", event => {
+      event.preventDefault();
+      const q = formData(searchForm).q.trim();
+      const url = new URL(location.href); url.hash = "#admin";
+      if (q) url.search = "?q=" + encodeURIComponent(q); else url.search = "";
+      history.replaceState(null, "", url); render();
+    });
     const inviteForm = make("form", { className: "inline-form" },
-      needsDepartment ? field("新院系名称", "departmentName") : select("院系", "departmentId", departmentChoices, me.department_id || departmentChoices[0]?.[0]),
+      select("专业", "majorId", majorChoices, majorChoices[0]?.[0]),
       select("角色", "role", [["counselor", "辅导员"]]),
       field("邀请数量（1–50）", "count", "number", true, "1"),
-      make("button", { className: "btn", type: "submit", text: needsDepartment ? "创建院系并生成邀请码" : "生成邀请码" }));
+      make("button", { className: "btn", type: "submit", text: "生成邀请码" }));
     const countInput = inviteForm.querySelector("[name=count]");
     countInput.min = "1"; countInput.max = "50";
-    const inviteOutput = make("div", { className: "muted invite-output", text: needsDepartment ? "尚未设置院系。输入真实院系名称后，即可生成第一个邀请码。" : "邀请码仅显示一次，有效期 7 天。" });
+    const inviteOutput = make("div", { className: "muted invite-output", text: "邀请码仅显示一次，有效期 7 天。" });
     inviteForm.addEventListener("submit", async event => {
       event.preventDefault();
       const release = busy(inviteForm);
       try {
-        const values = formData(inviteForm);
-        if (needsDepartment) {
-          const created = await post("/api/admin/departments", { name: values.departmentName.trim() });
-          values.departmentId = created.departmentId;
-          const selector = select("院系", "departmentId", [[values.departmentId, values.departmentName.trim()]], values.departmentId);
-          inviteForm.querySelector("[name=departmentName]").closest(".field").replaceWith(selector);
-          inviteForm.querySelector("[type=submit]").textContent = "生成邀请码";
-          needsDepartment = false;
-        }
-        const result = await post("/api/admin/invites", values);
+        const result = await post("/api/admin/invites", formData(inviteForm));
         inviteOutput.replaceChildren("已生成 " + result.codes.length + " 个邀请码，有效期 7 天。请逐一通过可信渠道发送给受邀人。",
           make("textarea", { className: "invite-codes", readOnly: "", "aria-label": "本次生成的邀请码", text: result.codes.join("\n") }),
           button("复制全部邀请码", async () => { await navigator.clipboard.writeText(result.codes.join("\n")); }, "secondary"));
       } catch (error) { feedback(inviteForm, error.message); }
       finally { release(); }
     });
-    const departmentForm = make("form", { className: "inline-form" },
-      field("新院系名称", "name"), make("button", { className: "btn", type: "submit", text: "添加院系" }));
-    departmentForm.addEventListener("submit", async event => {
+    const collegeForm = make("form", { className: "inline-form" },
+      field("新学院名称", "name"), make("button", { className: "btn", type: "submit", text: "添加学院" }));
+    collegeForm.addEventListener("submit", async event => {
       event.preventDefault();
-      try { await post("/api/admin/departments", formData(departmentForm)); render(); }
-      catch (error) { feedback(departmentForm, error.message); }
+      try { await post("/api/admin/departments", formData(collegeForm)); render(); }
+      catch (error) { feedback(collegeForm, error.message); }
     });
-    const canAddStudent = me.role === "counselor" || departmentChoices.length > 0;
+    const majorForm = make("form", { className: "inline-form" },
+      select("所属学院", "collegeId", collegeChoices, collegeChoices[0]?.[0]),
+      field("新专业名称", "name"), make("button", { className: "btn", type: "submit", text: "添加专业" }));
+    majorForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      try { await post("/api/admin/majors", formData(majorForm)); render(); }
+      catch (error) { feedback(majorForm, error.message); }
+    });
+    const classForm = make("form", { className: "inline-form" },
+      select("所属专业", "majorId", me.role === "admin" ? majorChoices : [[me.major_id, majorLabel(me.major_id)]], me.role === "admin" ? majorChoices[0]?.[0] : me.major_id),
+      field("新班级名称", "name"), make("button", { className: "btn", type: "submit", text: "添加班级" }));
+    classForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      try { await post("/api/admin/classes", formData(classForm)); render(); }
+      catch (error) { feedback(classForm, error.message); }
+    });
+    const canAddStudent = me.role === "counselor" || classChoices.length > 0;
     const addStudentForm = canAddStudent ? make("form", { className: "inline-form" },
       field("姓名", "name"), field("学号", "studentNo", "text"),
-      me.role === "admin" ? select("院系", "departmentId", departmentChoices, departmentChoices[0]?.[0]) : null,
+      select("班级", "classId", classChoices, classChoices[0]?.[0]),
       make("button", { className: "btn", type: "submit", text: "添加学生" })) : null;
     if (addStudentForm) addStudentForm.addEventListener("submit", async event => {
       event.preventDefault();
       const release = busy(addStudentForm);
-      try {
-        await post("/api/admin/students", formData(addStudentForm));
-        feedback(addStudentForm, "学生已添加，初始密码 cauc+学号。", "success");
-        render();
-      } catch (error) { feedback(addStudentForm, error.message); }
+      try { await post("/api/admin/students", formData(addStudentForm)); feedback(addStudentForm, "学生已添加，初始密码 cauc+学号。", "success"); render(); }
+      catch (error) { feedback(addStudentForm, error.message); }
       finally { release(); }
     });
-    const addCounselorForm = (me.role === "admin" && departmentChoices.length) ? make("form", { className: "inline-form" },
+    const addCounselorForm = (me.role === "admin" && majorChoices.length) ? make("form", { className: "inline-form" },
       field("姓名", "name"), field("用户名", "username", "text"),
-      select("院系", "departmentId", departmentChoices, departmentChoices[0]?.[0]),
+      select("专业", "majorId", majorChoices, majorChoices[0]?.[0]),
       make("button", { className: "btn", type: "submit", text: "添加辅导员" })) : null;
     if (addCounselorForm) addCounselorForm.addEventListener("submit", async event => {
       event.preventDefault();
       const release = busy(addCounselorForm);
-      try {
-        await post("/api/admin/counselors", formData(addCounselorForm));
-        feedback(addCounselorForm, "辅导员已添加，初始密码 cauc+用户名。", "success");
-        render();
-      } catch (error) { feedback(addCounselorForm, error.message); }
+      try { await post("/api/admin/counselors", formData(addCounselorForm)); feedback(addCounselorForm, "辅导员已添加，初始密码 cauc+用户名。", "success"); render(); }
+      catch (error) { feedback(addCounselorForm, error.message); }
       finally { release(); }
     });
     const selectedStudents = new Set();
     const studentCount = make("span", { className: "bulk-count", text: "已选 0 人" });
+    const setMonitor = async (student, cls) => {
+      if (!confirm("将 " + student.name + "（" + student.student_no + "）设为「" + cls.name + "」的班长？")) return;
+      try { await post("/api/admin/classes/monitor", { classId: cls.id, studentId: student.id }); render(); }
+      catch (error) { alert(error.message); }
+    };
     const students = make("table", { className: "data" },
       make("thead", {}, make("tr", {}, make("th", { className: "bulk-select" }, make("input", { type: "checkbox", "aria-label": "选择全部学生", onchange: event => {
         students.querySelectorAll("tbody input[type=checkbox]").forEach(box => { box.checked = event.target.checked; box.dispatchEvent(new Event("change")); });
-      } })), ["学号", "姓名", "院系", "当前节点", "操作"].map(x => make("th", { text: x })))),
+      } })), ["学号", "姓名", "班级", "当前节点", "操作"].map(x => make("th", { text: x })))),
       make("tbody", {}, data.students.map(student => make("tr", {},
         make("td", { className: "bulk-select" }, make("input", { type: "checkbox", value: student.id, "aria-label": "选择 " + student.name, onchange: event => {
           if (event.target.checked) selectedStudents.add(student.id); else selectedStudents.delete(student.id);
           studentCount.textContent = "已选 " + selectedStudents.size + " 人";
         } })),
         make("td", { text: student.student_no }), make("td", { text: student.name }),
-        make("td", { text: student.department || "" }),
+        make("td", { text: (student.major_name ? student.major_name + " · " : "") + (student.class_name || "未分班") }),
         make("td", { text: data.nodes.find(x => x.slug === student.current_node_slug)?.name || "" }),
         make("td", {}, button("管理", () => showStudent(student, data), "secondary"),
+          button("设班长", () => setMonitor(student, data.classes.find(c => c.id === student.class_id)), "secondary"),
           button("删除", async () => {
             if (!confirm("确认删除学生 " + student.name + "（学号 " + student.student_no + "）？此操作不可恢复。")) return;
             try { await post("/api/admin/students/bulk-delete", { studentIds: [student.id] }); render(); }
             catch (error) { alert(error.message); }
           }, "secondary"))))));
     const counselorsTable = make("table", { className: "data" },
-      make("thead", {}, make("tr", {}, ["姓名", "用户名", "院系", "操作"].map(x => make("th", { text: x })))),
+      make("thead", {}, make("tr", {}, ["姓名", "用户名", "专业", "操作"].map(x => make("th", { text: x })))),
       make("tbody", {}, data.counselors.map(counselor => make("tr", {},
         make("td", { text: counselor.name || "—" }),
         make("td", { text: counselor.username }),
-        make("td", { text: counselor.department || "" }),
+        make("td", { text: counselor.major_name || "未分配" }),
         make("td", {}, button("删除", async () => {
           if (!confirm("确认删除辅导员 " + (counselor.name || counselor.username) + "？其上传的表格也会一并删除。此操作不可恢复。")) return;
           try { await post("/api/admin/counselors/bulk-delete", { usernames: [counselor.username] }); render(); }
@@ -945,18 +967,31 @@ function adminPage() {
     const metrics = make("div", { className: "metric-grid" },
       metric("学生档案", String(data.students.length), "当前可管理的学生"),
       ...(me.role === "admin" ? [metric("辅导员", String(data.counselors.length), "已注册辅导员")] : []),
-      metric("院系", String(data.departments.length), "已配置院系"),
+      metric("班级", String(visibleClasses.length), me.role === "admin" ? "全部班级" : "本专业班级"),
+      ...(me.role === "admin" ? [metric("专业", String(data.majors.length), "已配置专业"), metric("学院", String(data.colleges.length), "已配置学院")] : []),
       ...(me.role === "admin" ? [metric("有效邀请", String(data.invites.filter(x => x.role === "counselor" && !x.used_by && new Date(x.expires_at) > new Date()).length), "未使用的辅导员邀请码", true)] : []));
     shell.replaceChildren(pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"),
       metrics,
-      ...(addStudentForm ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "手动添加学生" }), make("span", { className: "small", text: "单独添加一名学生，初始密码 cauc+学号。" })), addStudentForm)] : []),
+      panel(make("div", { className: "panel-head" }, make("h2", { text: "检索学生" })), searchForm),
+      ...(addStudentForm ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "手动添加学生" }), make("span", { className: "small", text: "单独添加一名学生到班级，初始密码 cauc+学号。" })), addStudentForm)] : []),
       ...(me.role === "admin" ? [
-        ...(addCounselorForm ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "手动添加辅导员" }), make("span", { className: "small", text: "单独添加一名辅导员，初始密码 cauc+用户名。" })), addCounselorForm)] : []),
+        ...(addCounselorForm ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "手动添加辅导员" }), make("span", { className: "small", text: "单独添加一名辅导员到专业，初始密码 cauc+用户名。" })), addCounselorForm)] : []),
         panel(make("div", { className: "panel-head" }, make("h2", { text: "辅导员管理" }), make("span", { className: "small", text: "共 " + data.counselors.length + " 人 · 批量增删请用右下角办公助理" })),
           data.counselors.length ? tableWrap(counselorsTable) : make("div", { className: "empty-state" }, make("strong", { text: "尚无辅导员" }), "可手动添加，或打开办公助理批量添加。"))
       ] : []),
-      ...(me.role === "admin" && !needsDepartment ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "院系设置" })), departmentForm)] : []),
-      ...(me.role === "admin" ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "邀请辅导员" })), inviteForm, inviteOutput)] : []),
+      panel(make("div", { className: "panel-head" }, make("h2", { text: "班级设置" }), make("span", { className: "small", text: "创建班级并命名，学生提交后可选该班班长" })),
+        classForm,
+        data.classes.length ? tableWrap(make("table", { className: "data" },
+          make("thead", {}, make("tr", {}, ["班级", "专业", "班长", "操作"].map(x => make("th", { text: x })))),
+          make("tbody", {}, visibleClasses.map(cls => make("tr", {},
+            make("td", { text: cls.name }),
+            make("td", { text: data.majors.find(m => m.id === cls.major_id)?.name || "" }),
+            make("td", { text: data.students.find(s => s.id === cls.monitor_user_id)?.name || "未设置" }),
+            make("td", {}, button("查看学生", () => { history.replaceState(null, "", "?q=&"); navigate("admin"); }, "secondary"))))))) : null),
+      ...(me.role === "admin" ? [
+        ...(!needCollege ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "学院与专业设置" })), collegeForm, majorForm)] : [panel(make("div", { className: "panel-head" }, make("h2", { text: "学院与专业设置" })), collegeForm)]),
+        ...(!needMajor ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "邀请辅导员" })), inviteForm, inviteOutput)] : [])
+      ] : []),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "学生档案" }), make("span", { className: "small", text: "共 " + data.students.length + " 人" })),
         data.students.length ? bulkTools : null,
         data.students.length ? tableWrap(students) : make("div", { className: "empty-state" }, make("strong", { text: "尚无学生" }), "打开办公助理上传入围名单，或在上方手动添加。")));
@@ -964,17 +999,17 @@ function adminPage() {
   return shell;
 }
 function showStudent(student, data) {
+  const orgLine = [student.college_name, student.major_name, student.class_name].filter(Boolean).join(" · ") || "未分配学院/专业/班级";
   const wrap = make("div", { className: "view view-student-detail" },
-    pageHead("STAFF / STUDENT PROFILE", student.name + "的档案", "学号 " + student.student_no + " · " + student.department),
+    pageHead("STAFF / STUDENT PROFILE", student.name + "的档案", "学号 " + student.student_no + " · " + orgLine),
     button("← 返回工作台", () => navigate("admin"), "secondary"));
+  const classChoices = (me.role === "admin" ? data.classes : data.classes.filter(c => c.major_id === me.major_id)).map(x => [x.id, (data.majors.find(m => m.id === x.major_id)?.name || "") + " · " + x.name]);
   const profileForm = make("form", { className: "form-grid" },
-    me.role === "admin" ? select("院系", "departmentId", data.departments.map(x => [x.id, x.name]), student.department_id) : field("院系", "departmentName", "text", false, student.department || ""),
-    field("专业", "major", "text", false, student.major || ""),
+    select("班级", "classId", classChoices, student.class_id),
     field("年级", "grade", "text", false, student.grade || ""),
     field("联系电话", "phone", "tel", false, student.phone || ""),
     field("申请入党日期", "appliedAt", "date", false, student.applied_at || ""),
     make("button", { className: "btn", type: "submit", text: "保存基本资料" }));
-  if (me.role !== "admin") profileForm.querySelector("[name=departmentName]").disabled = true;
   profileForm.addEventListener("submit", async event => {
     event.preventDefault();
     const release = busy(profileForm);

@@ -64,19 +64,24 @@ function deviceCookie(request) { return /(?:^|; )device=([a-f0-9]{32})(?:;|$)/.e
 async function currentUser(request, env) {
   const token = sessionCookie(request);
   if (!token) return null;
-  return env.DB.prepare("SELECT u.id,u.username,u.role,u.department_id,u.must_change_password,COALESCE(NULLIF(u.name,''),p.name) AS name,p.student_no,p.major,p.grade,p.phone,p.applied_at,p.current_stage_slug,p.current_node_slug,p.node_entered_at,p.is_graduate FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN profiles p ON p.user_id=u.id WHERE s.token_hash=? AND s.expires_at>?")
+  return env.DB.prepare("SELECT u.id,u.username,u.role,u.department_id,u.major_id,u.class_id,u.must_change_password,COALESCE(NULLIF(u.name,''),p.name) AS name,p.student_no,p.major,p.grade,p.phone,p.applied_at,p.current_stage_slug,p.current_node_slug,p.node_entered_at,p.is_graduate,cl.name AS class_name,cl.major_id AS class_major_id,m.name AS major_name,m.college_id AS major_college_id,d.name AS college_name,CASE WHEN cl.monitor_user_id=u.id THEN 1 ELSE 0 END AS is_monitor FROM sessions s JOIN users u ON u.id=s.user_id LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN classes cl ON cl.id=u.class_id LEFT JOIN majors m ON m.id=COALESCE(u.major_id,cl.major_id) LEFT JOIN departments d ON d.id=COALESCE(u.department_id,m.college_id) WHERE s.token_hash=? AND s.expires_at>?")
     .bind(await sha256(token), iso()).first();
 }
 const bodyJson = request => request.json().catch(() => ({}));
 const isStaff = user => user?.role === "admin" || user?.role === "counselor";
 async function canReadStudent(env, user, studentId) {
   if (user.role === "admin") return true;
-  if (user.role === "student") return user.id === studentId;
-  const student = await env.DB.prepare("SELECT department_id FROM users WHERE id=? AND role='student'").bind(studentId).first();
-  return !!student && student.department_id === user.department_id;
+  if (user.role === "student") {
+    if (user.id === studentId) return true;
+    if (!user.is_monitor || !user.class_id) return false;
+    const target = await env.DB.prepare("SELECT class_id FROM users WHERE id=? AND role='student'").bind(studentId).first();
+    return !!target && target.class_id === user.class_id;
+  }
+  const student = await env.DB.prepare("SELECT cl.major_id FROM users u LEFT JOIN classes cl ON cl.id=u.class_id WHERE u.id=? AND u.role='student'").bind(studentId).first();
+  return !!student && student.major_id === user.major_id;
 }
 async function targetStudent(env, user, studentId) {
-  const student = await env.DB.prepare("SELECT u.id,u.department_id,p.* FROM users u JOIN profiles p ON p.user_id=u.id WHERE u.id=?").bind(id(studentId)).first();
+  const student = await env.DB.prepare("SELECT u.id,u.class_id,cl.major_id,cl.name AS class_name,p.* FROM users u JOIN profiles p ON p.user_id=u.id LEFT JOIN classes cl ON cl.id=u.class_id WHERE u.id=?").bind(id(studentId)).first();
   assert(student, "学生不存在", 404);
   assert(await canReadStudent(env, user, student.id), "无权访问此学生资料", 403);
   return student;
@@ -109,9 +114,11 @@ async function startSession(env, userId) {
 async function authRoutes(request, env, path) {
   if (path === "/api/config" && request.method === "GET") {
     const count = await env.DB.prepare("SELECT count(*) AS n FROM users").first();
-    const departments = await env.DB.prepare("SELECT id,name FROM departments ORDER BY name").all();
+    const colleges = await env.DB.prepare("SELECT id,name FROM departments ORDER BY name").all();
+    const majors = await env.DB.prepare("SELECT id,college_id,name FROM majors ORDER BY id").all();
+    const classes = await env.DB.prepare("SELECT id,major_id,name,monitor_user_id FROM classes ORDER BY id").all();
     const headers = deviceCookie(request) ? {} : { "set-cookie": "device=" + randomHex(16) + "; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000" };
-    return json({ ok: true, initialized: count.n > 0, departments: departments.results, aiEnabled: !!env.DEEPSEEK_API_KEY }, 200, headers);
+    return json({ ok: true, initialized: count.n > 0, colleges: colleges.results, majors: majors.results, classes: classes.results, aiEnabled: !!env.DEEPSEEK_API_KEY }, 200, headers);
   }
   if (path === "/api/auth/challenge" && request.method === "GET") {
     requireSecret(env);
@@ -151,8 +158,8 @@ async function authRoutes(request, env, path) {
     const verifier = await hmac(env.AUTH_PEPPER, username.toLowerCase() + ":" + data.verifier);
     let userId = null;
     try {
-      const result = await env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name) VALUES(?,?,?,?,?,?)")
-        .bind(username, data.salt, verifier, invite.role, invite.department_id, name).run();
+      const result = await env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,major_id,name) VALUES(?,?,?,?,?,?,?)")
+        .bind(username, data.salt, verifier, invite.role, invite.department_id, invite.major_id, name).run();
       userId = result.meta.last_row_id;
       const updated = await env.DB.prepare("UPDATE invites SET used_by=? WHERE id=? AND used_by IS NULL").bind(userId, invite.id).run();
       assert(updated.meta.changes === 1, "邀请码已被使用", 409);
@@ -214,8 +221,7 @@ async function studentRoutes(request, env, path, user) {
     const node = await env.DB.prepare("SELECT * FROM nodes WHERE slug=?").bind(user.current_node_slug).first();
     const next = node ? await env.DB.prepare("SELECT * FROM nodes WHERE stage_slug=? AND position>? ORDER BY position LIMIT 1").bind(node.stage_slug, node.position).first() : null;
     const materials = await env.DB.prepare("SELECT m.*,r.status,r.id AS record_id,r.r2_key FROM materials m LEFT JOIN material_records r ON r.material_id=m.id AND r.student_id=? WHERE m.stage_slug=? ORDER BY m.id").bind(user.id, user.current_stage_slug).all();
-    const department = await env.DB.prepare("SELECT name FROM departments WHERE id=?").bind(user.department_id).first();
-    return json({ ok: true, profile: user, department: department?.name || "", stage, node, next, materials: materials.results });
+    return json({ ok: true, profile: user, college: user.college_name || "", major: user.major_name || "", className: user.class_name || "", stage, node, next, materials: materials.results });
   }
   if (path === "/api/materials" && request.method === "GET") {
     const materials = await env.DB.prepare("SELECT id,slug,name,stage_slug,category,fill_method FROM materials ORDER BY id").all();
@@ -347,7 +353,7 @@ export async function mentorRoutes(request, env, path, user) {
       await logMentorQuestion(env, user, question, decision);
       const en = !isChineseQuestion(question);
       if (!user) return json({ ok: true, answer: en ? "I don't know. Log in and I can tell you." : "不知道。登录后我才能告诉你。", sources: [], route: "identity", intent: "business" });
-      const dept = await env.DB.prepare("SELECT name FROM departments WHERE id=?").bind(user.department_id).first();
+      const org = [user.college_name, user.major_name, user.class_name].filter(Boolean).join(" · ") || "学院/专业/班级未填";
       let answer;
       if (user.role === "student") {
         const [stage, node] = await Promise.all([
@@ -355,13 +361,13 @@ export async function mentorRoutes(request, env, path, user) {
           env.DB.prepare("SELECT name FROM nodes WHERE slug=?").bind(user.current_node_slug).first()
         ]);
         answer = en
-          ? "You are " + (user.name || "—") + ", student number " + (user.student_no || "—") + ", " + (dept?.name || "department unset") + ", currently at the \u201c" + (stage?.name || "unset") + "\u201d stage, node \u201c" + (node?.name || "unset") + "\u201d. Contact your counselor if anything is wrong."
-          : "你是" + (user.name || "未填") + "，学号 " + (user.student_no || "未填") + "，" + (dept?.name || "院系未填") + "，当前处于「" + (stage?.name || "未设置") + "」阶段，节点「" + (node?.name || "未设置") + "」。如信息有误，请联系辅导员。";
+          ? "You are " + (user.name || "—") + ", student number " + (user.student_no || "—") + ", " + (org || "—") + ", currently at the \u201c" + (stage?.name || "unset") + "\u201d stage, node \u201c" + (node?.name || "unset") + "\u201d. Contact your counselor if anything is wrong."
+          : "你是" + (user.name || "未填") + "，学号 " + (user.student_no || "未填") + "，" + org + "，当前处于「" + (stage?.name || "未设置") + "」阶段，节点「" + (node?.name || "未设置") + "」。如信息有误，请联系辅导员。";
       } else {
         const roleName = user.role === "admin" ? "管理员" : "辅导员";
         answer = en
-          ? "You are " + (user.name || user.username) + " (" + (user.role === "admin" ? "administrator" : "counselor") + "), " + (dept?.name || "—") + "."
-          : "你是" + (user.name || user.username) + "，用户名 " + user.username + "，角色：" + roleName + "，" + (dept?.name || "院系未填") + "。";
+          ? "You are " + (user.name || user.username) + " (" + (user.role === "admin" ? "administrator" : "counselor") + ")" + (user.role === "counselor" ? ", " + (user.major_name || "—") : "") + "."
+          : "你是" + (user.name || user.username) + "，用户名 " + user.username + "，角色：" + roleName + (user.role === "counselor" ? "，" + (user.major_name || "专业未填") : "") + "。";
       }
       return json({ ok: true, answer, sources: [], route: "identity", intent: "business" });
     }
@@ -438,10 +444,13 @@ export async function checkRoutes(request, env, path, user) {
     catch { throw new HttpError(400, "质检结果无效"); }
     const key = "checks/" + user.id + "/" + randomHex(16) + "." + type.ext;
     await env.FILES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: type.mime } });
+    // 本班设了班长则需班长先审核，否则直接进入辅导员审核
+    const cls = await env.DB.prepare("SELECT monitor_user_id FROM classes WHERE id=?").bind(user.class_id || 0).first();
+    const monitorApproved = cls?.monitor_user_id ? 0 : 1;
     let checkId = null;
     try {
-      const row = await env.DB.prepare("INSERT INTO checks(student_id,material_id,r2_key,filename) VALUES(?,?,?,?)")
-        .bind(user.id, materialId, key, filename).run();
+      const row = await env.DB.prepare("INSERT INTO checks(student_id,material_id,r2_key,filename,monitor_approved) VALUES(?,?,?,?,?)")
+        .bind(user.id, materialId, key, filename, monitorApproved).run();
       checkId = row.meta.last_row_id;
       await env.DB.batch([
         ...results.map(result => env.DB.prepare("INSERT INTO check_results(check_id,kind,code,message,severity,suggestion) VALUES(?,?,?,?,?,?)")
@@ -449,6 +458,17 @@ export async function checkRoutes(request, env, path, user) {
         env.DB.prepare("INSERT INTO material_records(student_id,material_id,status,r2_key,filename,submitted_at) VALUES(?,?,'已交',?,?,?) ON CONFLICT(student_id,material_id) DO UPDATE SET status='已交',r2_key=excluded.r2_key,filename=excluded.filename,submitted_at=excluded.submitted_at")
           .bind(user.id, materialId, key, filename, iso())
       ]);
+      // 覆盖上传：删除同一学生同一材料的旧版本，只保留最新一份
+      const previous = await env.DB.prepare("SELECT id,r2_key FROM checks WHERE student_id=? AND material_id=? AND id<>?").bind(user.id, materialId, checkId).all();
+      if (previous.results.length) {
+        const ids = previous.results.map(item => item.id);
+        const marks = ids.map(() => "?").join(",");
+        await env.DB.batch([
+          env.DB.prepare("DELETE FROM check_results WHERE check_id IN (" + marks + ")").bind(...ids),
+          env.DB.prepare("DELETE FROM checks WHERE id IN (" + marks + ")").bind(...ids)
+        ]);
+        await Promise.allSettled(previous.results.map(item => env.FILES.delete(item.r2_key)));
+      }
       return json({ ok: true, id: checkId, results }, 201);
     } catch (error) {
       if (checkId) await env.DB.prepare("DELETE FROM checks WHERE id=?").bind(checkId).run();
@@ -458,11 +478,26 @@ export async function checkRoutes(request, env, path, user) {
   }
   if (path === "/api/checks" && request.method === "GET") {
     const rows = user.role === "student"
-      ? await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,m.name AS material_name FROM checks c JOIN materials m ON m.id=c.material_id WHERE c.student_id=? ORDER BY c.checked_at DESC LIMIT 50").bind(user.id).all()
+      ? (user.is_monitor
+          ? await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,c.monitor_approved,m.name AS material_name,p.name AS student_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id JOIN users u ON u.id=c.student_id WHERE u.class_id=? ORDER BY c.checked_at DESC LIMIT 100").bind(user.class_id).all()
+          : await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,c.monitor_approved,m.name AS material_name FROM checks c JOIN materials m ON m.id=c.material_id WHERE c.student_id=? ORDER BY c.checked_at DESC LIMIT 50").bind(user.id).all())
       : user.role === "admin"
-        ? await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,m.name AS material_name,p.name AS student_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id ORDER BY c.checked_at DESC LIMIT 100").all()
-        : await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,m.name AS material_name,p.name AS student_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id JOIN users u ON u.id=c.student_id WHERE u.department_id=? ORDER BY c.checked_at DESC LIMIT 100").bind(user.department_id).all();
+        ? await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,c.monitor_approved,m.name AS material_name,p.name AS student_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id ORDER BY c.checked_at DESC LIMIT 100").all()
+        : await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,c.monitor_approved,m.name AS material_name,p.name AS student_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id JOIN users u ON u.id=c.student_id LEFT JOIN classes cl ON cl.id=u.class_id WHERE cl.major_id=? ORDER BY c.checked_at DESC LIMIT 100").bind(user.major_id).all();
     return json({ ok: true, checks: rows.results });
+  }
+  if (path === "/api/checks/monitor-approve" && request.method === "POST") {
+    assert(user.role === "student" && user.is_monitor && user.class_id, "仅班长可执行此操作", 403);
+    const ids = selectedIds((await bodyJson(request)).checkIds);
+    const marks = ids.map(() => "?").join(",");
+    const rows = await env.DB.prepare("SELECT c.id,c.student_id,c.monitor_approved,c.review_status,u.class_id FROM checks c JOIN users u ON u.id=c.student_id WHERE c.id IN (" + marks + ")").bind(...ids).all();
+    assert(rows.results.length === ids.length, "部分材料不存在", 404);
+    for (const row of rows.results) {
+      assert(row.class_id === user.class_id, "只能审核本班同学提交的材料", 403);
+      assert(row.review_status === "待审阅" && row.monitor_approved === 0, "该材料已审核或不是待班长审核状态", 409);
+    }
+    await env.DB.batch(rows.results.map(row => env.DB.prepare("UPDATE checks SET monitor_approved=1,monitor_approved_at=? WHERE id=?").bind(iso(), row.id)));
+    return json({ ok: true, count: rows.results.length });
   }
   const match = /^\/api\/checks\/(\d+)\/(file|results)$/.exec(path);
   if (match && request.method === "GET") {
@@ -531,8 +566,9 @@ export async function formRoutes(request, env, path, user) {
 async function registerCounselors(env, user, data) {
   requireSecret(env);
   assert(user.role === "admin", "仅管理员可批量添加辅导员", 403);
-  const departmentId = id(data.departmentId);
-  assert(await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(departmentId).first(), "院系不存在", 404);
+  const majorId = id(data.majorId);
+  const major = await env.DB.prepare("SELECT id,college_id FROM majors WHERE id=?").bind(majorId).first();
+  assert(major, "专业不存在", 404);
   assert(Array.isArray(data.counselors) && data.counselors.length >= 1 && data.counselors.length <= 50, "每次可添加 1 至 50 名辅导员");
   const counselors = data.counselors.map(item => ({ name: clean(item?.name, 50), username: clean(item?.username, 40) }));
   for (const counselor of counselors) {
@@ -548,7 +584,7 @@ async function registerCounselors(env, user, data) {
   for (const counselor of counselors) {
     const salt = randomHex(16);
     const initial = await hmac(env.AUTH_PEPPER, "initial:" + counselor.username.toLowerCase() + ":cauc+" + counselor.username);
-    statements.push(env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name,must_change_password) VALUES(?,?,?,'counselor',?,?,1)").bind(counselor.username, salt, initial, departmentId, counselor.name));
+    statements.push(env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,major_id,name,must_change_password) VALUES(?,?,?,'counselor',?,?,?,1)").bind(counselor.username, salt, initial, major.college_id, majorId, counselor.name));
   }
   try { await env.DB.batch(statements); }
   catch (error) {
@@ -640,11 +676,12 @@ async function reviewChecks(env, user, data, finish = null) {
   assert(["已通过", "退回修改"].includes(status), "审阅状态无效");
   assert(status !== "退回修改" || note, "退回材料时请填写修改说明");
   const marks = ids.map(() => "?").join(",");
-  const rows = await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.review_status,c.filename,m.name AS material_name,u.department_id FROM checks c JOIN users u ON u.id=c.student_id JOIN materials m ON m.id=c.material_id WHERE c.id IN (" + marks + ")").bind(...ids).all();
+  const rows = await env.DB.prepare("SELECT c.id,c.student_id,c.material_id,c.review_status,c.monitor_approved,c.filename,m.name AS material_name,cl.major_id FROM checks c JOIN users u ON u.id=c.student_id JOIN materials m ON m.id=c.material_id LEFT JOIN classes cl ON cl.id=u.class_id WHERE c.id IN (" + marks + ")").bind(...ids).all();
   assert(rows.results.length === ids.length, "部分材料不存在", 404);
   const updates = [];
   for (const row of rows.results) {
-    assert(user.role === "admin" || row.department_id === user.department_id, "无权审阅其他院系材料", 403);
+    assert(user.role === "admin" || row.major_id === user.major_id, "无权审阅其他专业材料", 403);
+    assert(row.monitor_approved === 1, row.filename + "尚未经班长审核", 409);
     assert(row.review_status === "待审阅", row.filename + "已审阅，请刷新列表", 409);
     const latest = await env.DB.prepare("SELECT id FROM checks WHERE student_id=? AND material_id=? ORDER BY id DESC LIMIT 1").bind(row.student_id, row.material_id).first();
     assert(latest?.id === row.id, row.filename + "已被新提交版本替代", 409);
@@ -659,26 +696,56 @@ async function reviewChecks(env, user, data, finish = null) {
 }
 
 async function createDepartment(env, user, data, finish = null) {
-  assert(user.role === "admin", "仅管理员可维护院系", 403);
+  assert(user.role === "admin", "仅管理员可维护学院", 403);
   const name = clean(data.name, 100);
-  assert(name, "请输入院系名称");
+  assert(name, "请输入学院名称");
   const insert = env.DB.prepare("INSERT INTO departments(name) VALUES(?)").bind(name);
   const result = finish ? (await env.DB.batch([insert, finish]))[0] : await insert.run();
   return json({ ok: true, departmentId: result.meta.last_row_id }, 201);
 }
 
+async function createMajor(env, user, data) {
+  assert(user.role === "admin", "仅管理员可维护专业", 403);
+  const collegeId = id(data.collegeId), name = clean(data.name, 100);
+  assert(name, "请输入专业名称");
+  assert(await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(collegeId).first(), "学院不存在", 404);
+  const result = await env.DB.prepare("INSERT INTO majors(college_id,name) VALUES(?,?)").bind(collegeId, name).run();
+  return json({ ok: true, majorId: result.meta.last_row_id }, 201);
+}
+
+async function createClass(env, user, data) {
+  assert(isStaff(user), "仅辅导员或管理员可维护班级", 403);
+  const majorId = id(data.majorId), name = clean(data.name, 100);
+  assert(name, "请输入班级名称");
+  const major = await env.DB.prepare("SELECT id FROM majors WHERE id=?").bind(majorId).first();
+  assert(major && (user.role === "admin" || majorId === user.major_id), "专业不存在或不在管理范围内", 404);
+  const result = await env.DB.prepare("INSERT INTO classes(major_id,name) VALUES(?,?)").bind(majorId, name).run();
+  return json({ ok: true, classId: result.meta.last_row_id }, 201);
+}
+
+async function setMonitor(env, user, data) {
+  assert(isStaff(user), "仅辅导员或管理员可设置班长", 403);
+  const classId = id(data.classId), studentId = id(data.studentId);
+  const cls = await env.DB.prepare("SELECT id,major_id FROM classes WHERE id=?").bind(classId).first();
+  assert(cls && (user.role === "admin" || cls.major_id === user.major_id), "班级不存在或不在管理范围内", 404);
+  const student = await env.DB.prepare("SELECT id,class_id FROM users WHERE id=? AND role='student'").bind(studentId).first();
+  assert(student && student.class_id === classId, "学生不存在或不在该班级", 404);
+  await env.DB.prepare("UPDATE classes SET monitor_user_id=? WHERE id=?").bind(studentId, classId).run();
+  return json({ ok: true });
+}
+
 async function createInvites(env, user, data, finish = null) {
   assert(user.role === "admin", "仅管理员可邀请辅导员", 403);
-  const role = clean(data.role, 20), departmentId = id(data.departmentId);
+  const role = clean(data.role, 20), majorId = id(data.majorId);
   assert(role === "counselor", "邀请码仅用于辅导员注册");
-  const department = await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(departmentId).first();
-  assert(department, "院系不存在", 404);
+  const major = await env.DB.prepare("SELECT id,college_id FROM majors WHERE id=?").bind(majorId).first();
+  assert(major, "专业不存在", 404);
   const count = Number(data.count ?? 1);
   assert(Number.isSafeInteger(count) && count >= 1 && count <= 50, "一次可生成 1 至 50 个邀请码");
   const codes = Array.from({ length: count }, () => randomHex(24));
   const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
-  const inserts = await Promise.all(codes.map(async code => env.DB.prepare("INSERT INTO invites(code_hash,role,department_id,expires_at,created_by) VALUES(?,?,?,?,?)")
-    .bind(await sha256(code), role, departmentId, expiresAt, user.id)));
+  const inserts = await Promise.all(codes.map(async code => env.DB.prepare("INSERT INTO invites(code_hash,role,department_id,major_id,expires_at,created_by) VALUES(?,?,?,?,?,?)")
+    .bind(await sha256(code), role, major.college_id, majorId, expiresAt, user.id)));
   await env.DB.batch([...inserts, ...(finish ? [finish] : [])]);
   return json({ ok: true, codes, code: codes[0], expiresInDays: 7 }, 201);
 }
@@ -689,8 +756,12 @@ export async function adminRoutes(request, env, path, user) {
   if (path === "/api/admin/students/auto-register" && request.method === "POST") {
     requireSecret(env);
     assert(user.role === "counselor", "仅辅导员可执行自动注册", 403);
-    assert(user.department_id, "辅导员尚未分配院系", 403);
+    assert(user.major_id, "辅导员尚未分配专业", 403);
     const data = await bodyJson(request);
+    const classId = id(data.classId);
+    const cls = await env.DB.prepare("SELECT id,major_id FROM classes WHERE id=?").bind(classId).first();
+    assert(cls && cls.major_id === user.major_id, "班级不存在或不属于你的专业", 404);
+    const collegeId = (await env.DB.prepare("SELECT college_id FROM majors WHERE id=?").bind(cls.major_id).first())?.college_id;
     assert(Array.isArray(data.students) && data.students.length >= 1 && data.students.length <= 50, "每次可注册 1 至 50 名学生");
     const students = data.students.map(item => ({ name: clean(item?.name, 50), studentNo: clean(item?.studentNo, 40) }));
     for (const student of students) {
@@ -706,8 +777,8 @@ export async function adminRoutes(request, env, path, user) {
     for (const student of students) {
       const salt = randomHex(16);
       const initial = await hmac(env.AUTH_PEPPER, "initial:" + student.studentNo.toLowerCase() + ":cauc+" + student.studentNo);
-      statements.push(env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name,must_change_password) VALUES(?,?,?,'student',?,?,1)")
-        .bind(student.studentNo, salt, initial, user.department_id, student.name));
+      statements.push(env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,class_id,name,must_change_password) VALUES(?,?,?,'student',?,?,?,1)")
+        .bind(student.studentNo, salt, initial, collegeId, classId, student.name));
       statements.push(env.DB.prepare("INSERT INTO profiles(user_id,name,student_no,major,grade,phone,applied_at,node_entered_at) SELECT id,?,?, '', '', '', NULL, ? FROM users WHERE username=?")
         .bind(student.name, student.studentNo, iso().slice(0, 10), student.studentNo));
     }
@@ -719,19 +790,24 @@ export async function adminRoutes(request, env, path, user) {
     return json({ ok: true, count: students.length }, 201);
   }
   if (path === "/api/admin/dashboard" && request.method === "GET") {
-    const students = user.role === "admin"
-      ? await env.DB.prepare("SELECT u.id,u.username,u.department_id,d.name AS department,p.* FROM users u JOIN profiles p ON p.user_id=u.id LEFT JOIN departments d ON d.id=u.department_id ORDER BY p.student_no LIMIT 500").all()
-      : await env.DB.prepare("SELECT u.id,u.username,u.department_id,d.name AS department,p.* FROM users u JOIN profiles p ON p.user_id=u.id LEFT JOIN departments d ON d.id=u.department_id WHERE u.department_id=? ORDER BY p.student_no LIMIT 500").bind(user.department_id).all();
-    const departments = await env.DB.prepare("SELECT id,name FROM departments ORDER BY name").all();
+    const q = clean(new URL(request.url).searchParams.get("q") || "", 50);
+    const cond = [], args = [];
+    if (user.role !== "admin") { cond.push("cl.major_id=?"); args.push(user.major_id); }
+    if (q) { cond.push("(p.name LIKE ? OR p.student_no LIKE ?)"); args.push("%" + q + "%", "%" + q + "%"); }
+    const where = cond.length ? " WHERE " + cond.join(" AND ") : "";
+    const students = await env.DB.prepare("SELECT u.id,u.username,u.class_id,cl.name AS class_name,cl.major_id,m.name AS major_name,m.college_id,d.name AS college_name,p.* FROM users u JOIN profiles p ON p.user_id=u.id LEFT JOIN classes cl ON cl.id=u.class_id LEFT JOIN majors m ON m.id=cl.major_id LEFT JOIN departments d ON d.id=m.college_id" + where + " ORDER BY p.student_no LIMIT 500").bind(...args).all();
+    const colleges = await env.DB.prepare("SELECT id,name FROM departments ORDER BY name").all();
+    const majors = await env.DB.prepare("SELECT id,college_id,name FROM majors ORDER BY id").all();
+    const classes = await env.DB.prepare("SELECT id,major_id,name,monitor_user_id FROM classes ORDER BY id").all();
     const nodes = await env.DB.prepare("SELECT slug,stage_slug,name,position FROM nodes ORDER BY stage_slug,position").all();
     const materials = await env.DB.prepare("SELECT id,name,stage_slug FROM materials ORDER BY id").all();
     const invites = user.role === "admin"
-      ? await env.DB.prepare("SELECT i.id,i.role,i.department_id,d.name AS department,i.expires_at,i.used_by FROM invites i LEFT JOIN departments d ON d.id=i.department_id ORDER BY i.id DESC LIMIT 100").all()
-      : await env.DB.prepare("SELECT i.id,i.role,i.department_id,d.name AS department,i.expires_at,i.used_by FROM invites i LEFT JOIN departments d ON d.id=i.department_id WHERE i.department_id=? ORDER BY i.id DESC LIMIT 100").bind(user.department_id).all();
+      ? await env.DB.prepare("SELECT i.id,i.role,i.major_id,m.name AS major_name,i.expires_at,i.used_by FROM invites i LEFT JOIN majors m ON m.id=i.major_id ORDER BY i.id DESC LIMIT 100").all()
+      : await env.DB.prepare("SELECT i.id,i.role,i.major_id,m.name AS major_name,i.expires_at,i.used_by FROM invites i LEFT JOIN majors m ON m.id=i.major_id WHERE i.major_id=? ORDER BY i.id DESC LIMIT 100").bind(user.major_id).all();
     const counselors = user.role === "admin"
-      ? await env.DB.prepare("SELECT u.id,u.username,u.department_id,d.name AS department,u.name,u.created_at FROM users u LEFT JOIN departments d ON d.id=u.department_id WHERE u.role='counselor' ORDER BY u.id").all()
-      : await env.DB.prepare("SELECT u.id,u.username,u.department_id,d.name AS department,u.name,u.created_at FROM users u LEFT JOIN departments d ON d.id=u.department_id WHERE u.role='counselor' AND u.department_id=?").bind(user.department_id).all();
-    return json({ ok: true, students: students.results, counselors: counselors.results, departments: departments.results, nodes: nodes.results, materials: materials.results, invites: invites.results });
+      ? await env.DB.prepare("SELECT u.id,u.username,u.major_id,m.name AS major_name,m.college_id,d.name AS college_name,u.name,u.created_at FROM users u LEFT JOIN majors m ON m.id=u.major_id LEFT JOIN departments d ON d.id=m.college_id WHERE u.role='counselor' ORDER BY u.id").all()
+      : await env.DB.prepare("SELECT u.id,u.username,u.major_id,m.name AS major_name,m.college_id,d.name AS college_name,u.name,u.created_at FROM users u LEFT JOIN majors m ON m.id=u.major_id LEFT JOIN departments d ON d.id=m.college_id WHERE u.role='counselor' AND u.major_id=?").bind(user.major_id).all();
+    return json({ ok: true, students: students.results, counselors: counselors.results, colleges: colleges.results, majors: majors.results, classes: classes.results, nodes: nodes.results, materials: materials.results, invites: invites.results });
   }
   if (path === "/api/admin/students/bulk-advance" && request.method === "POST") {
     return advanceStudents(env, user, await bodyJson(request));
@@ -745,16 +821,17 @@ export async function adminRoutes(request, env, path, user) {
     const name = clean(data.name, 50), studentNo = clean(data.studentNo, 40);
     assert(/^[\p{Script=Han}·]{2,20}$/u.test(name), "姓名须为 2 至 20 个汉字或间隔号");
     assert(/^\d{6,20}$/.test(studentNo), "学号须为 6 至 20 位数字");
-    const departmentId = user.role === "admin" ? id(data.departmentId) : user.department_id;
-    assert(departmentId, "院系无效");
-    if (user.role === "admin") assert(await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(departmentId).first(), "院系不存在", 404);
+    const classId = id(data.classId);
+    const cls = await env.DB.prepare("SELECT id,major_id FROM classes WHERE id=?").bind(classId).first();
+    assert(cls && (user.role === "admin" || cls.major_id === user.major_id), "班级不存在或不在管理范围内", 404);
+    const collegeId = (await env.DB.prepare("SELECT college_id FROM majors WHERE id=?").bind(cls.major_id).first())?.college_id;
     const existing = await env.DB.prepare("SELECT id FROM users WHERE username=? COLLATE NOCASE").bind(studentNo).first();
     assert(!existing, "该学号已注册", 409);
     const salt = randomHex(16);
     const initial = await hmac(env.AUTH_PEPPER, "initial:" + studentNo.toLowerCase() + ":cauc+" + studentNo);
     try {
       await env.DB.batch([
-        env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name,must_change_password) VALUES(?,?,?,'student',?,?,1)").bind(studentNo, salt, initial, departmentId, name),
+        env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,class_id,name,must_change_password) VALUES(?,?,?,'student',?,?,?,1)").bind(studentNo, salt, initial, collegeId, classId, name),
         env.DB.prepare("INSERT INTO profiles(user_id,name,student_no,major,grade,phone,applied_at,node_entered_at) SELECT id,?,?, '', '', '', NULL, ? FROM users WHERE username=?").bind(name, studentNo, iso().slice(0, 10), studentNo)
       ]);
     } catch (error) {
@@ -770,13 +847,14 @@ export async function adminRoutes(request, env, path, user) {
     const name = clean(data.name, 50), username = clean(data.username, 40);
     assert(/^[\p{Script=Han}·]{2,20}$/u.test(name), "姓名须为 2 至 20 个汉字或间隔号");
     assert(validName(username), "用户名只能包含字母、数字、点、横线或下划线，长度为 3 至 40 位");
-    const departmentId = id(data.departmentId);
-    assert(await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(departmentId).first(), "院系不存在", 404);
+    const majorId = id(data.majorId);
+    const major = await env.DB.prepare("SELECT id,college_id FROM majors WHERE id=?").bind(majorId).first();
+    assert(major, "专业不存在", 404);
     const existing = await env.DB.prepare("SELECT id FROM users WHERE username=? COLLATE NOCASE").bind(username).first();
     assert(!existing, "该用户名已存在", 409);
     const salt = randomHex(16);
     const initial = await hmac(env.AUTH_PEPPER, "initial:" + username.toLowerCase() + ":cauc+" + username);
-    await env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name,must_change_password) VALUES(?,?,?,'counselor',?,?,1)").bind(username, salt, initial, departmentId, name).run();
+    await env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,major_id,name,must_change_password) VALUES(?,?,?,'counselor',?,?,?,1)").bind(username, salt, initial, major.college_id, majorId, name).run();
     return json({ ok: true, name, username }, 201);
   }
   if (path === "/api/admin/counselors/auto-register" && request.method === "POST") {
@@ -797,6 +875,15 @@ export async function adminRoutes(request, env, path, user) {
   if (path === "/api/admin/departments" && request.method === "POST") {
     return createDepartment(env, user, await bodyJson(request));
   }
+  if (path === "/api/admin/majors" && request.method === "POST") {
+    return createMajor(env, user, await bodyJson(request));
+  }
+  if (path === "/api/admin/classes" && request.method === "POST") {
+    return createClass(env, user, await bodyJson(request));
+  }
+  if (path === "/api/admin/classes/monitor" && request.method === "POST") {
+    return setMonitor(env, user, await bodyJson(request));
+  }
   if (path === "/api/admin/invites" && request.method === "POST") {
     return createInvites(env, user, await bodyJson(request));
   }
@@ -805,11 +892,12 @@ export async function adminRoutes(request, env, path, user) {
   if (profileMatch && request.method === "POST") {
     const student = await targetStudent(env, user, profileMatch[1]);
     const data = await bodyJson(request);
-    const departmentId = user.role === "admin" ? id(data.departmentId) : user.department_id;
-    assert(departmentId, "院系无效");
-    if (user.role === "admin") assert(await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(departmentId).first(), "院系不存在", 404);
+    const classId = id(data.classId);
+    const cls = await env.DB.prepare("SELECT id,major_id FROM classes WHERE id=?").bind(classId).first();
+    assert(cls && (user.role === "admin" || cls.major_id === user.major_id), "班级不存在或不在管理范围内", 404);
+    const collegeId = (await env.DB.prepare("SELECT college_id FROM majors WHERE id=?").bind(cls.major_id).first())?.college_id;
     await env.DB.batch([
-      env.DB.prepare("UPDATE users SET department_id=? WHERE id=?").bind(departmentId, student.id),
+      env.DB.prepare("UPDATE users SET class_id=?,department_id=? WHERE id=?").bind(classId, collegeId, student.id),
       env.DB.prepare("UPDATE profiles SET major=?,grade=?,phone=?,applied_at=? WHERE user_id=?")
         .bind(clean(data.major, 100), clean(data.grade, 20), clean(data.phone, 20), clean(data.appliedAt, 10) || null, student.id)
     ]);
@@ -849,8 +937,8 @@ async function officeStudent(env, user, identifier) {
   const value = clean(identifier, 50);
   assert(value, "请提供学生姓名或学号");
   const rows = user.role === "admin"
-    ? await env.DB.prepare("SELECT u.id,u.username,u.department_id,p.name,p.student_no,p.current_stage_slug,p.grade FROM users u JOIN profiles p ON p.user_id=u.id WHERE u.role='student' AND (p.student_no=? OR p.name=?) LIMIT 3").bind(value, value).all()
-    : await env.DB.prepare("SELECT u.id,u.username,u.department_id,p.name,p.student_no,p.current_stage_slug,p.grade FROM users u JOIN profiles p ON p.user_id=u.id WHERE u.role='student' AND u.department_id=? AND (p.student_no=? OR p.name=?) LIMIT 3").bind(user.department_id, value, value).all();
+    ? await env.DB.prepare("SELECT u.id,u.username,u.class_id,p.name,p.student_no,p.current_stage_slug,p.grade FROM users u JOIN profiles p ON p.user_id=u.id WHERE u.role='student' AND (p.student_no=? OR p.name=?) LIMIT 3").bind(value, value).all()
+    : await env.DB.prepare("SELECT u.id,u.username,u.class_id,p.name,p.student_no,p.current_stage_slug,p.grade FROM users u JOIN profiles p ON p.user_id=u.id LEFT JOIN classes cl ON cl.id=u.class_id WHERE u.role='student' AND cl.major_id=? AND (p.student_no=? OR p.name=?) LIMIT 3").bind(user.major_id, value, value).all();
   assert(rows.results.length, "找不到可管理的学生：" + value, 404);
   assert(rows.results.length === 1, "姓名“" + value + "”对应多位学生，请使用学号", 409);
   return rows.results[0];
@@ -865,11 +953,11 @@ async function officeAudience(env, user, action, limit) {
     assert(Array.isArray(list) && list.length > 0 && list.length <= limit &&
       list.every(item => typeof item?.student === "string" && item.student.trim()), "请提供 1 至 " + limit + " 名学生的姓名或学号");
     const identifiers = list.map(item => clean(item.student, 50));
-    const scope = user.role === "admin" ? "" : " AND u.department_id=?";
+    const scope = user.role === "admin" ? "" : " AND cl.major_id=?";
     const { results } = await env.DB.prepare("WITH targets(value) AS (SELECT value FROM json_each(?)) " +
-      "SELECT u.id,p.name,p.student_no,p.grade,p.current_stage_slug FROM users u JOIN profiles p ON p.user_id=u.id WHERE u.role='student'" +
+      "SELECT u.id,p.name,p.student_no,p.grade,p.current_stage_slug FROM users u JOIN profiles p ON p.user_id=u.id LEFT JOIN classes cl ON cl.id=u.class_id WHERE u.role='student'" +
       " AND (p.student_no IN (SELECT value FROM targets) OR p.name IN (SELECT value FROM targets))" + scope)
-      .bind(JSON.stringify(identifiers), ...(scope ? [user.department_id] : [])).all();
+      .bind(JSON.stringify(identifiers), ...(scope ? [user.major_id] : [])).all();
     const students = identifiers.map(value => {
       const matches = results.filter(student => student.student_no === value || student.name === value);
       assert(matches.length, "找不到可管理的学生：" + value, 404);
@@ -882,12 +970,16 @@ async function officeAudience(env, user, action, limit) {
   const filters = action.audience ?? {};
   assert(filters && typeof filters === "object" && !Array.isArray(filters), "学生筛选条件无效");
   const clauses = ["u.role='student'"], args = [];
-  if (filters.departmentId !== undefined) {
-    const departmentId = id(filters.departmentId);
-    assert(user.role === "admin" || departmentId === user.department_id, "无权访问其他院系学生", 403);
-    clauses.push("u.department_id=?"); args.push(departmentId);
+  if (filters.majorId !== undefined) {
+    const majorId = id(filters.majorId);
+    assert(user.role === "admin" || majorId === user.major_id, "无权访问其他专业学生", 403);
+    clauses.push("cl.major_id=?"); args.push(majorId);
+  } else if (filters.classId !== undefined) {
+    const classId = id(filters.classId);
+    clauses.push("u.class_id=?"); args.push(classId);
+    if (user.role !== "admin") assert(await env.DB.prepare("SELECT id FROM classes WHERE id=? AND major_id=?").bind(classId, user.major_id).first(), "无权访问其他班级学生", 403);
   } else if (user.role !== "admin") {
-    clauses.push("u.department_id=?"); args.push(user.department_id);
+    clauses.push("cl.major_id=?"); args.push(user.major_id);
   }
   for (const [field, column, max] of [["stageSlug", "p.current_stage_slug", 80], ["grade", "p.grade", 20]]) {
     if (filters[field] === undefined) continue;
@@ -896,9 +988,9 @@ async function officeAudience(env, user, action, limit) {
     clauses.push(column + "=?"); args.push(value);
   }
   if (action.type === "send_notifications") {
-    assert(["departmentId", "stageSlug", "grade"].some(field => filters[field] !== undefined), "请提供收件人名单，或指定院系、阶段或年级");
+    assert(["majorId", "classId", "stageSlug", "grade"].some(field => filters[field] !== undefined), "请提供收件人名单，或指定专业、班级、阶段或年级");
   }
-  return (await env.DB.prepare("SELECT u.id,p.name,p.student_no,p.grade,p.current_stage_slug FROM users u JOIN profiles p ON p.user_id=u.id WHERE " +
+  return (await env.DB.prepare("SELECT u.id,p.name,p.student_no,p.grade,p.current_stage_slug FROM users u JOIN profiles p ON p.user_id=u.id LEFT JOIN classes cl ON cl.id=u.class_id WHERE " +
     clauses.join(" AND ") + " ORDER BY p.student_no LIMIT ?").bind(...args, limit + 1).all()).results;
 }
 
@@ -914,9 +1006,9 @@ async function executeOfficeTask(env, user, plan, planId) {
     case "send_notifications": {
       const ids = selectedIds(plan.studentIds, 50);
       const marks = ids.map(() => "?").join(",");
-      const scope = user.role === "admin" ? "" : " AND department_id=?";
+      const scope = user.role === "admin" ? "" : " AND id IN (SELECT u.id FROM users u LEFT JOIN classes cl ON cl.id=u.class_id WHERE cl.major_id=?)";
       const { results } = await env.DB.prepare("SELECT id FROM users WHERE role='student' AND id IN (" + marks + ")" + scope)
-        .bind(...ids, ...(scope ? [user.department_id] : [])).all();
+        .bind(...ids, ...(scope ? [user.major_id] : [])).all();
       assert(results.length === ids.length, "部分收件人已变更或不在管理范围内，请重新预览", 409);
       await env.DB.batch([...ids.map(studentId => env.DB.prepare("INSERT INTO notifications(student_id,kind,title,content) VALUES(?,'lesson',?,?)")
         .bind(studentId, plan.title, plan.content)), finish]);
@@ -934,7 +1026,19 @@ async function executeOfficeTask(env, user, plan, planId) {
     }
     case "create_department":
       await createDepartment(env, user, plan, finish);
-      return { count, message: "已新增院系「" + plan.name + "」。" };
+      return { count, message: "已新增学院「" + plan.name + "」。" };
+    case "create_major":
+      await createMajor(env, user, plan);
+      await finish.run();
+      return { count, message: "已新增专业「" + plan.name + "」。" };
+    case "create_class":
+      await createClass(env, user, plan);
+      await finish.run();
+      return { count, message: "已新增班级「" + plan.name + "」。" };
+    case "set_monitor":
+      await setMonitor(env, user, plan);
+      await finish.run();
+      return { count, message: "已设置班长。" };
   }
 }
 
@@ -944,11 +1048,11 @@ async function normalizeOfficeAction(env, user, action, files) {
     const student = action.student === undefined ? null : await officeStudent(env, user, action.student);
     const conditions = ["u.role='student'", "c.id=(SELECT MAX(id) FROM checks WHERE student_id=c.student_id AND material_id=c.material_id)"];
     const args = [];
-    if (user.role !== "admin") { conditions.push("u.department_id=?"); args.push(user.department_id); }
+    if (user.role !== "admin") { conditions.push("cl.major_id=?"); args.push(user.major_id); }
     if (student) { conditions.push("c.student_id=?"); args.push(student.id); }
     if (action.pendingOnly === true) conditions.push("c.review_status='待审阅'");
     const { results } = await env.DB.prepare("SELECT p.name,p.student_no,m.name AS material_name,c.filename,c.review_status FROM checks c " +
-      "JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id JOIN users u ON u.id=c.student_id WHERE " +
+      "JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id JOIN users u ON u.id=c.student_id LEFT JOIN classes cl ON cl.id=u.class_id WHERE " +
       conditions.join(" AND ") + " ORDER BY c.id DESC LIMIT 21").bind(...args).all();
     return { answer: results.length ? "最新材料提交记录\n" + results.slice(0, 20).map(row =>
       studentLabel(row) + " / " + row.material_name + " / " + row.filename + " / " + row.review_status).join("\n") +
@@ -998,27 +1102,51 @@ async function normalizeOfficeAction(env, user, action, files) {
     return { type, checkIds, status, note, preview: "审阅结果：" + status + (note ? "\n说明：" + note : "") +
       "\n以下学生将收到站内通知：\n" + rows.map(row => row.label).join("\n") };
   }
-  if (type === "create_invites" || type === "create_department") {
-    assert(user.role === "admin", "仅管理员可执行此操作", 403);
+  if (type === "create_invites" || type === "create_department" || type === "create_major" || type === "create_class" || type === "set_monitor") {
     if (type === "create_department") {
+      assert(user.role === "admin", "仅管理员可执行此操作", 403);
       const name = clean(action.name, 100);
-      assert(name, "请输入院系名称");
-      return { type, name, preview: "将新增院系「" + name + "」。" };
+      assert(name, "请输入学院名称");
+      return { type, name, preview: "将新增学院「" + name + "」。" };
     }
-    const departmentId = id(action.departmentId), count = Number(action.count);
+    if (type === "create_major") {
+      assert(user.role === "admin", "仅管理员可执行此操作", 403);
+      const college = await env.DB.prepare("SELECT name FROM departments WHERE id=?").bind(id(action.collegeId)).first();
+      assert(college, "学院不存在", 404);
+      const name = clean(action.name, 100);
+      assert(name, "请输入专业名称");
+      return { type, collegeId: id(action.collegeId), name, preview: "将在「" + college.name + "」下新增专业「" + name + "」。" };
+    }
+    if (type === "create_class") {
+      const major = await env.DB.prepare("SELECT id,name FROM majors WHERE id=?").bind(id(action.majorId)).first();
+      assert(major && (user.role === "admin" || major.id === user.major_id), "专业不存在或不在管理范围内", 404);
+      const name = clean(action.name, 100);
+      assert(name, "请输入班级名称");
+      return { type, majorId: major.id, name, preview: "将在「" + major.name + "」下新增班级「" + name + "」。" };
+    }
+    if (type === "set_monitor") {
+      const classId = id(action.classId);
+      const cls = await env.DB.prepare("SELECT id,name,major_id FROM classes WHERE id=?").bind(classId).first();
+      assert(cls && (user.role === "admin" || cls.major_id === user.major_id), "班级不存在或不在管理范围内", 404);
+      const student = await officeStudent(env, user, action.student);
+      assert(student.class_id === classId, "该学生不属于所选班级", 409);
+      return { type, classId, studentId: student.id, studentNo: student.student_no, preview: "将把 " + student.name + "（" + student.student_no + "）设为「" + cls.name + "」的班长。" };
+    }
+    assert(user.role === "admin", "仅管理员可执行此操作", 403);
+    const majorId = id(action.majorId), count = Number(action.count);
     assert(Number.isSafeInteger(count) && count >= 1 && count <= 50, "一次可生成 1 至 50 个邀请码");
-    const department = await env.DB.prepare("SELECT name FROM departments WHERE id=?").bind(departmentId).first();
-    assert(department, "院系不存在", 404);
-    return { type, departmentId, count, role: "counselor", preview: "将为「" + department.name + "」生成 " + count + " 个辅导员邀请码，有效期 7 天。" };
+    const major = await env.DB.prepare("SELECT name FROM majors WHERE id=?").bind(majorId).first();
+    assert(major, "专业不存在", 404);
+    return { type, majorId, count, role: "counselor", preview: "将为「" + major.name + "」生成 " + count + " 个辅导员邀请码，有效期 7 天。" };
   }
   if (type === "register_counselors") {
     assert(user.role === "admin", "仅管理员可批量添加辅导员", 403);
-    const department = await env.DB.prepare("SELECT id,name FROM departments WHERE id=?").bind(id(action.departmentId)).first();
-    assert(department, "院系不存在", 404);
+    const major = await env.DB.prepare("SELECT id,name FROM majors WHERE id=?").bind(id(action.majorId)).first();
+    assert(major, "专业不存在", 404);
     const counselors = action.counselors.map(item => ({ name: clean(item.name, 50), username: clean(item.username, 40) }));
     assert(counselors.every(item => /^[\p{Script=Han}·]{2,20}$/u.test(item.name) && validName(item.username)), "名单须包含有效的姓名和用户名");
     assert(new Set(counselors.map(item => item.username.toLowerCase())).size === counselors.length, "名单中有重复用户名");
-    return { type, departmentId: department.id, counselors, preview: "将为" + department.name + "注册辅导员：\n" +
+    return { type, majorId: major.id, counselors, preview: "将为「" + major.name + "」注册辅导员：\n" +
       counselors.map(item => item.name + "（" + item.username + "）").join("\n") + "\n初始密码为 cauc+用户名，首次登录须修改。" };
   }
   if (type === "delete_counselors") {
@@ -1032,15 +1160,15 @@ async function normalizeOfficeAction(env, user, action, files) {
       results.map(item => (item.name || "辅导员") + "（" + item.username + "）").join("\n") };
   }
   if (type === "register_students") {
-    const departmentId = user.role === "admin" ? Number(action.departmentId) : user.department_id;
-    assert(Number.isSafeInteger(departmentId) && departmentId > 0, "管理员请说明学生所属院系");
-    assert(await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(departmentId).first(), "院系不存在", 404);
+    const classId = id(action.classId);
+    const cls = await env.DB.prepare("SELECT id,major_id FROM classes WHERE id=?").bind(classId).first();
+    assert(cls && (user.role === "admin" || cls.major_id === user.major_id), "请说明学生所属班级，且班级须在管理范围内", 404);
     const students = action.students.map(item => ({ name: clean(item.name, 50), studentNo: clean(item.studentNo, 40) }));
     assert(students.every(item => /^[\p{Script=Han}·]{2,20}$/u.test(item.name) && /^\d{6,20}$/.test(item.studentNo)), "名单须包含有效的姓名和学号");
     assert(new Set(students.map(item => item.studentNo)).size === students.length, "名单中有重复学号");
     const existing = await env.DB.prepare("SELECT username FROM users WHERE username IN (" + students.map(() => "?").join(",") + ")").bind(...students.map(item => item.studentNo)).all();
     assert(!existing.results.length, "以下学号已有账号：" + existing.results.map(item => item.username).join("、"), 409);
-    return { type, departmentId, students, preview: "将注册 " + students.length + " 名学生：" + students.map(item => item.name + "（" + item.studentNo + "）").join("、") + "。初始密码为 cauc+学号，首次登录强制修改。" };
+    return { type, classId, students, preview: "将注册 " + students.length + " 名学生：" + students.map(item => item.name + "（" + item.studentNo + "）").join("、") + "。初始密码为 cauc+学号，首次登录强制修改。" };
   }
   if (type === "reset_password") {
     const student = await officeStudent(env, user, action.student);
@@ -1127,8 +1255,11 @@ export async function officeRoutes(request, env, path, user) {
     const catalog = {
       stages: (await env.DB.prepare("SELECT slug,name FROM stages ORDER BY position").all()).results,
       materials: (await env.DB.prepare("SELECT name,stage_slug FROM materials ORDER BY id").all()).results,
-      departments: user.role === "admin" ? (await env.DB.prepare("SELECT id,name FROM departments ORDER BY name").all()).results :
-        (await env.DB.prepare("SELECT id,name FROM departments WHERE id=?").bind(user.department_id).all()).results
+      colleges: (await env.DB.prepare("SELECT id,name FROM departments ORDER BY name").all()).results,
+      majors: user.role === "admin" ? (await env.DB.prepare("SELECT id,college_id,name FROM majors ORDER BY id").all()).results :
+        (await env.DB.prepare("SELECT id,college_id,name FROM majors WHERE id=?").bind(user.major_id).all()).results,
+      classes: user.role === "admin" ? (await env.DB.prepare("SELECT id,major_id,name FROM classes ORDER BY id").all()).results :
+        (await env.DB.prepare("SELECT id,major_id,name FROM classes WHERE major_id=?").bind(user.major_id).all()).results
     };
     const references = retrieve(question).filter(item => item.similarity >= mentorConfig(env).similarityThreshold).slice(0, 3);
     const raw = await deepSeekContent(env, { model: "deepseek-flash", messages: officeMessages(question, documentText, files, user.role, catalog, history, references), response_format: { type: "json_object" }, reasoning_effort: "none", stream: false, max_tokens: 2800, temperature: 0.1 });
@@ -1155,7 +1286,7 @@ export async function officeRoutes(request, env, path, user) {
     assert(locked.meta.changes === 1, "操作已在执行中", 409);
     const plan = JSON.parse(row.payload_json);
     try {
-      if (["delete_students", "send_notifications", "advance_students", "review_materials", "create_invites", "create_department"].includes(plan.type)) {
+      if (["delete_students", "send_notifications", "advance_students", "review_materials", "create_invites", "create_department", "create_major", "create_class", "set_monitor"].includes(plan.type)) {
         return json({ ok: true, ...await executeOfficeTask(env, user, plan, planId) });
       }
       let result;
@@ -1167,11 +1298,13 @@ export async function officeRoutes(request, env, path, user) {
         result = { count, message: "已删除 " + count + " 名辅导员。" + (cleanupFailed ? "有 " + cleanupFailed + " 份文件未能完成存储清理。" : "") };
       } else if (plan.type === "register_students") {
         requireSecret(env);
-        assert(user.role === "admin" || user.department_id === plan.departmentId, "院系权限已变化，请重新提出任务", 403);
+        const cls = await env.DB.prepare("SELECT id,major_id FROM classes WHERE id=?").bind(plan.classId).first();
+        assert(cls && (user.role === "admin" || cls.major_id === user.major_id), "班级权限已变化，请重新提出任务", 403);
+        const collegeId = (await env.DB.prepare("SELECT college_id FROM majors WHERE id=?").bind(cls.major_id).first())?.college_id;
         const statements = [];
         for (const student of plan.students) {
           const salt = randomHex(16), initial = await hmac(env.AUTH_PEPPER, "initial:" + student.studentNo.toLowerCase() + ":cauc+" + student.studentNo);
-          statements.push(env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name,must_change_password) VALUES(?,?,?,'student',?,?,1)").bind(student.studentNo, salt, initial, plan.departmentId, student.name));
+          statements.push(env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,class_id,name,must_change_password) VALUES(?,?,?,'student',?,?,?,1)").bind(student.studentNo, salt, initial, collegeId, plan.classId, student.name));
           statements.push(env.DB.prepare("INSERT INTO profiles(user_id,name,student_no,major,grade,phone,applied_at,node_entered_at) SELECT id,?,?, '', '', '', NULL, ? FROM users WHERE username=?").bind(student.name, student.studentNo, iso().slice(0, 10), student.studentNo));
         }
         await env.DB.batch(statements);
