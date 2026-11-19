@@ -11,9 +11,35 @@ const counselor = { id: 8, role: "counselor", department_id: 2 };
 
 test("办公助理使用独立人格和仅规划不执行的提示词", () => {
   const messages = officeMessages("为张三重置密码", "", [], "counselor", { stages: [], materials: [] });
-  assert.match(messages[0].content, /知行/);
+  assert.match(messages[0].content, /办公助理/);
   assert.match(messages[0].content, /所有写入都需要用户查看预览并点击确认/);
   assert.match(messages[0].content, /不能猜测学号/);
+});
+
+test("管理员的对话计划保留辅导员名单和指定院系", () => {
+  const action = { type: "register_counselors", departmentId: 2, counselors: [{ name: "张三", username: "teacher1" }] };
+  assert.deepEqual(parseOfficePlan(JSON.stringify({ reply: "请核对名单", action })).action, action);
+  assert.match(officeMessages("", "", [], "admin", {})[0].content, /delete_counselors/);
+  assert.doesNotMatch(officeMessages("", "", [], "counselor", {})[0].content, /delete_counselors/);
+});
+
+test("辅导员不能通过对话为其他辅导员生成删除计划", async () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: {
+    content: JSON.stringify({ reply: "请确认", action: { type: "delete_counselors", counselors: [{ username: "teacher1" }] } })
+  } }] }));
+  let writes = 0;
+  const env = { DEEPSEEK_API_KEY: "test", DB: { prepare() { return {
+    async all() { return { results: [] }; },
+    async run() { writes++; }
+  }; } } };
+  try {
+    const response = await officeRoutes(request("/api/office/plan", { question: "删除辅导员 teacher1" }), env, "/api/office/plan", counselor);
+    const result = await response.json();
+    assert.equal(result.plan, null);
+    assert.match(result.answer, /仅管理员/);
+    assert.equal(writes, 0);
+  } finally { globalThis.fetch = previousFetch; }
 });
 
 test("办公规划拒绝未知工具和无效清单，允许澄清", () => {

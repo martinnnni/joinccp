@@ -1,7 +1,7 @@
 import JSZip from "jszip";
 import officialForms from "../official-forms.json";
 import { extractReviewText } from "./file-text.js";
-import { extractRosterText, parseRosterText, parseCounselorRoster } from "./roster.js";
+import { extractRosterText } from "./roster.js";
 import { deriveVerifier } from "./pbkdf2.js";
 
 const root = document.getElementById("app");
@@ -24,7 +24,7 @@ const make = (tag, props = {}, ...children) => {
   }
   return node;
 };
-const mentorTitle = () => (me && (me.role === "counselor" || me.role === "admin")) ? "知行 · 办公助理" : "成长导师";
+const mentorTitle = () => (me && (me.role === "counselor" || me.role === "admin")) ? "办公助理" : "成长导师";
 const mentorErrorText = (code, message) => "错误代码 " + code + "：" + message + "。请将错误代码报告给你的导员和支持部门。";
 const renderMarkdown = src => {
   const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -325,11 +325,11 @@ function mentorPage() {
     const navLinks = () => links.map(([page, label]) => make("a", { href: "#" + page, text: label, onclick: closeMentor }));
     const log = make("div", { className: "mentor-thread", role: "log", "aria-live": "polite", "aria-label": "成长导师对话", tabindex: "0" });
     const empty = make("div", { className: "mentor-empty" },
-      make("span", { className: "mentor-kicker", text: staffAgent ? "ZHI XING / OFFICE ASSISTANT" : "GROWTH MENTOR / 成长导师" }),
+      make("span", { className: "mentor-kicker", text: staffAgent ? "OFFICE ASSISTANT / 办公助理" : "GROWTH MENTOR / 成长导师" }),
       make("h1", { text: staffAgent ? "今天想处理什么？" : "今天想了解什么？" }),
       make("p", { text: staffAgent ? "告诉我任务，或上传名单与文件。我会整理执行清单，待你确认后处理。" : "从培养流程到写作思路，直接说出你的问题。" }));
     const prompts = make("div", { className: "mentor-prompts" },
-      (staffAgent ? ["批量登记学生", "批量更新学生档案", "上传培养表格", "为学生重置密码"] : ["我现在处于哪个入党阶段？", "我交了哪些材料，还有哪些没交？", "这个系统怎么使用？", "入党申请书如何组织结构？"])
+      (staffAgent ? ["批量登记学生", "批量更新学生档案", "上传培养表格", "为学生重置密码", ...(me.role === "admin" ? ["批量添加辅导员", "批量删除辅导员"] : [])] : ["我现在处于哪个入党阶段？", "我交了哪些材料，还有哪些没交？", "这个系统怎么使用？", "入党申请书如何组织结构？"])
         .map(question => button(question, () => { textarea.value = question; form.requestSubmit(); }, "mentor-prompt")));
     empty.append(prompts);
     const sourceView = sources => make("details", { className: "mentor-sources" },
@@ -339,7 +339,7 @@ function mentorPage() {
     const appendMessage = item => {
       const row = make("div", { className: "mentor-row " + item.role });
       const msg = make("div", { className: "mentor-message" });
-      if (item.role === "assistant") msg.innerHTML = renderMarkdown(item.content || "");
+      if (item.role === "assistant" && !staffAgent) msg.innerHTML = renderMarkdown(item.content || "");
       else msg.textContent = item.content || "";
       const body = make("div", { className: "mentor-bubble" }, msg);
       if (item.sources?.length) body.append(sourceView(item.sources));
@@ -347,16 +347,9 @@ function mentorPage() {
     };
     const textarea = make("textarea", { name: "question", rows: "1", maxlength: "1000", required: "", "aria-label": staffAgent ? "向办公助理描述任务" : "向成长导师提问", placeholder: staffAgent ? "描述要完成的办公任务…" : status.enabled ? "向成长导师提问…" : "检索培养资料…" });
     const send = make("button", { type: "submit", className: "mentor-send", "aria-label": "发送问题", title: "发送问题" }, icon("M4 12 20 4 14 20 11 13 4 12Z M11 13 20 4", "发送"));
-    let workflowMode = staffAgent ? "office" : "chat";
-    let pendingRoster = null;
     let pendingOfficePlan = null;
     let pendingOfficeButton = null;
     let officeHistory = [];
-    const rosterPrompt = () => workflowMode === "counselor-register"
-      ? "请上传或粘贴辅导员名单，每行“姓名 用户名”。选择院系后，我会先列出识别结果，等你确认后再创建账号。"
-      : workflowMode === "counselor-delete"
-        ? "请上传或粘贴要删除的辅导员用户名，每行一个。我会先列出识别结果，等你确认后再删除。"
-        : "请上传 Excel、Word 或 PDF 入围名单。也可以直接粘贴“姓名 学号”，每行一人；我会先列出识别结果，等你确认后再注册。";
     let selectedFile = null;
     let selectedFiles = [];
     const fileInput = make("input", { type: "file", accept: ".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document", className: "mentor-file-input", "aria-label": "选择 Word DOCX 或 PDF 文件" });
@@ -364,8 +357,8 @@ function mentorPage() {
     const clearFile = () => { selectedFile = null; selectedFiles = []; fileInput.value = ""; attachment.hidden = true; attachment.replaceChildren(); textarea.required = true; };
     const attach = make("button", { type: "button", className: "mentor-attach", "aria-label": "上传 Word 或 PDF 文件", title: "上传 Word DOCX 或 PDF" }, icon("M8 12.5 14.5 6a3 3 0 0 1 4.2 4.2l-8.1 8.1a5 5 0 0 1-7.1-7.1l8.4-8.4", "附件"));
     const acceptFile = file => {
-      if (!file) return;
-      if (workflowMode === "office") {
+      if (!file || (Array.isArray(file) && !file.length)) return;
+      if (staffAgent) {
         const incoming = Array.isArray(file) ? file : [file];
         if (incoming.length > 10 || incoming.some(item => !/\.(doc|docx|xls|xlsx|pdf|csv|txt)$/i.test(item.name) || item.size < 1 || item.size > 10 * 1024 * 1024)) {
           clearFile(); appendMessage({ role: "assistant", content: "一次最多选择 10 份文件，每份不超过 10 MB；支持 DOC、DOCX、XLS、XLSX、PDF、CSV、TXT。" }); return;
@@ -374,16 +367,15 @@ function mentorPage() {
         attachment.replaceChildren(make("span", { text: incoming.map(item => item.name).join("、") }), button("移除", clearFile, "mentor-remove-attachment"));
         return;
       }
-      const allowed = workflowMode !== "chat" ? /\.(xlsx|csv|txt|docx|pdf)$/i : /\.(docx|pdf)$/i;
+      const allowed = /\.(docx|pdf)$/i;
       if (!allowed.test(file.name) || file.size > 10 * 1024 * 1024 || file.size < 1) {
-        clearFile(); appendMessage({ role: "assistant", content: workflowMode !== "chat" ? "名单请上传不超过 10 MB 的 XLSX、CSV、TXT、DOCX 或可搜索 PDF。" : "请上传不超过 10 MB 的 Word DOCX 或 PDF。旧版 .doc 请另存为 .docx。" }); return;
+        clearFile(); appendMessage({ role: "assistant", content: "请上传不超过 10 MB 的 Word DOCX 或 PDF。旧版 .doc 请另存为 .docx。" }); return;
       }
       selectedFile = file; textarea.required = false; attachment.hidden = false;
       attachment.replaceChildren(make("span", { text: file.name }), button("移除", clearFile, "mentor-remove-attachment"));
-      if (workflowMode !== "chat") form.requestSubmit();
     };
     attach.addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", () => acceptFile(workflowMode === "office" ? Array.from(fileInput.files || []) : fileInput.files?.[0]));
+    fileInput.addEventListener("change", () => acceptFile(staffAgent ? Array.from(fileInput.files || []) : fileInput.files?.[0]));
     const form = make("form", { className: "mentor-composer" }, fileInput, attachment,
       make("div", { className: "mentor-composer-box" }, attach, textarea, send),
       make("p", { className: "mentor-composer-note", text: "校内要求以辅导员通知为准" }));
@@ -391,7 +383,7 @@ function mentorPage() {
     form.addEventListener("dragenter", event => { event.preventDefault(); dragDepth++; form.classList.add("mentor-dragging"); });
     form.addEventListener("dragleave", event => { event.preventDefault(); dragDepth--; if (dragDepth <= 0) { dragDepth = 0; form.classList.remove("mentor-dragging"); } });
     form.addEventListener("dragover", event => { event.preventDefault(); });
-    form.addEventListener("drop", event => { event.preventDefault(); dragDepth = 0; form.classList.remove("mentor-dragging"); acceptFile(workflowMode === "office" ? Array.from(event.dataTransfer?.files || []) : event.dataTransfer?.files?.[0]); });
+    form.addEventListener("drop", event => { event.preventDefault(); dragDepth = 0; form.classList.remove("mentor-dragging"); acceptFile(staffAgent ? Array.from(event.dataTransfer?.files || []) : event.dataTransfer?.files?.[0]); });
     let userReading = false;
     for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) log.addEventListener(type, () => { userReading = true; }, { passive: true });
     const scrollEnd = () => { log.scrollTop = log.scrollHeight; };
@@ -402,11 +394,9 @@ function mentorPage() {
       log.scrollTop += offset - padding - 10;
     };
     const reset = () => {
-      mentorHistory = []; officeHistory = []; pendingRoster = null; pendingOfficePlan = null; pendingOfficeButton = null; pendingConfirm = null; userReading = false; log.replaceChildren();
-      if (workflowMode !== "chat" && workflowMode !== "office") appendMessage({ role: "assistant", content: rosterPrompt() });
-      else log.append(empty);
-      textarea.value = ""; clearFile();
-      if (workflowMode === "chat" || workflowMode === "office") textarea.focus(); else textarea.blur();
+      mentorHistory = []; officeHistory = []; pendingOfficePlan = null; pendingOfficeButton = null; userReading = false;
+      log.replaceChildren(empty);
+      textarea.value = ""; clearFile(); textarea.focus();
     };
     const newChat = () => button("新对话", reset, "mentor-new-chat");
     const aside = make("aside", { className: "mentor-sidebar" },
@@ -434,180 +424,24 @@ function mentorPage() {
       [4, 3, 2, 1, 0].forEach((n, idx) => { girlTimers.push(setTimeout(() => setGirlFrame(n), idx * 180)); });
     };
     const hero = make("div", { className: "mentor-hero" },
-      staffAgent ? make("div", { className: "office-avatar", "aria-hidden": "true", text: "知行" }) : make("div", { className: "mentor-girl", "aria-hidden": "true" }, girlImg),
+      make("div", { className: "mentor-girl", "aria-hidden": "true" }, girlImg),
       make("div", { className: "mentor-titlebox" },
         make("strong", { text: mentorTitle() }),
         make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })));
     const header = make("header", { className: "mentor-topbar" }, make("div", { className: "mentor-topbar-left" }, menu, newChat()));
-    const canWorkflow = me?.role === "counselor" || me?.role === "admin";
-    const workflowToggle = canWorkflow ? make("input", { type: "checkbox", "aria-label": "启用工作流" }) : null;
-    const workflowChoices = me?.role === "admin"
-      ? [["counselor-register", "批量添加辅导员"], ["counselor-delete", "批量删除辅导员"]]
-      : [["auto-register", "自动注册学生"]];
-    const workflowChoice = workflowToggle ? make("select", { "aria-label": "选择工作流", disabled: "" },
-      workflowChoices.map(([value, text]) => make("option", { value, text }))) : null;
-    const counselorDeptSelect = (me?.role === "admin" && config?.departments?.length)
-      ? make("select", { "aria-label": "辅导员所属院系", disabled: "" }, config.departments.map(department => make("option", { value: department.id, text: department.name })))
-      : null;
-    const workflow = workflowToggle ? make("div", { className: "mentor-workflow-bar" },
-      make("label", { className: "mentor-workflow-toggle" }, workflowToggle, make("span", { text: "启用工作流" })),
-      make("label", { className: "mentor-workflow-choice" }, make("span", { text: "执行" }), workflowChoice),
-      ...(counselorDeptSelect ? [make("label", { className: "mentor-workflow-choice" }, make("span", { text: "院系" }), counselorDeptSelect)] : [])) : null;
-    const syncWorkflow = () => {
-      workflowChoice.disabled = !workflowToggle.checked;
-      workflowMode = workflowToggle.checked ? workflowChoice.value : "office";
-      const roster = workflowMode !== "chat";
-      fileInput.multiple = workflowMode === "office";
-      fileInput.accept = workflowMode === "office" ? ".doc,.docx,.xls,.xlsx,.pdf,.csv,.txt" : roster ? ".xlsx,.csv,.txt,.docx,.pdf" : ".docx,.pdf";
-      fileInput.setAttribute("aria-label", workflowMode === "office" ? "选择办公任务文件" : roster ? "上传名单" : "选择 Word DOCX 或 PDF 文件");
-      attach.setAttribute("aria-label", workflowMode === "office" ? "选择办公任务文件" : roster ? "上传名单" : "上传 Word 或 PDF 文件");
-      attach.title = workflowMode === "office" ? "选择最多 10 份文件" : roster ? "上传 XLSX、CSV、TXT、DOCX 或 PDF 名单" : "上传 Word DOCX 或 PDF";
-      textarea.placeholder = workflowMode === "office" ? "描述要完成的办公任务…" : roster
-        ? (workflowMode === "auto-register" ? "也可粘贴名单，每行：姓名 学号" : workflowMode === "counselor-register" ? "也可粘贴名单，每行：姓名 用户名" : "也可粘贴名单，每行：用户名")
-        : status.enabled ? "向成长导师提问…" : "检索培养资料…";
-      if (counselorDeptSelect) counselorDeptSelect.disabled = !workflowToggle.checked || workflowMode !== "counselor-register";
-      reset();
-    };
-    if (workflow) { workflowToggle.addEventListener("change", syncWorkflow); workflowChoice.addEventListener("change", syncWorkflow); }
-    if (staffAgent) { fileInput.multiple = true; fileInput.accept = ".doc,.docx,.xls,.xlsx,.pdf,.csv,.txt"; }
-    const content = make("div", { className: "mentor-content" }, log, workflow, form);
+    if (staffAgent) {
+      fileInput.multiple = true;
+      fileInput.accept = ".doc,.docx,.xls,.xlsx,.pdf,.csv,.txt";
+      fileInput.setAttribute("aria-label", "选择办公任务文件");
+      attach.setAttribute("aria-label", "选择办公任务文件");
+      attach.title = "选择最多 10 份文件";
+    }
+    const content = make("div", { className: "mentor-content" }, log, form);
     shell.replaceChildren(aside, make("section", { className: "mentor-main", "aria-label": "成长导师" }, hero, header, content));
     if (mentorHistory.length) for (const item of mentorHistory) appendMessage(item); else log.append(empty);
     const resize = () => { textarea.style.height = "auto"; textarea.style.height = Math.min(textarea.scrollHeight, 176) + "px"; };
     textarea.addEventListener("input", resize);
     textarea.addEventListener("keydown", event => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } });
-    let pendingConfirm = null;
-    const showRosterPreview = result => {
-      const row = appendMessage({ role: "assistant", content: "我识别到 " + result.rows.length + " 人。请直接核对、修改或移除表格中的记录，确认后才会创建账号。" });
-      row.classList.add("roster-message");
-      const body = row.querySelector(".mentor-bubble");
-      if (result.issues.length) body.append(make("p", { className: "roster-issues", text: "需要核对：" + result.issues.slice(0, 5).join("；") }));
-      const table = make("table", { className: "data roster-table" },
-        make("thead", {}, make("tr", {}, ["姓名", "学号", "操作"].map(label => make("th", { text: label })))),
-        make("tbody", {}, result.rows.map(item => make("tr", { className: "roster-row" },
-          make("td", {}, make("input", { className: "roster-name", value: item.name, "aria-label": "学生姓名" })),
-          make("td", {}, make("input", { className: "roster-number", value: item.studentNo, inputmode: "numeric", "aria-label": "学号" })),
-          make("td", {}, button("移除", event => event.currentTarget.closest("tr").remove(), "secondary"))))));
-      let confirmAction;
-      const confirm = button("确认并注册", () => confirmAction(), "btn");
-      pendingRoster = table;
-      confirmAction = async () => {
-        if (workflowMode !== "auto-register" || pendingRoster !== table || confirm.disabled) return;
-        const students = Array.from(table.querySelectorAll(".roster-row"), tr => ({
-          name: tr.querySelector(".roster-name").value.trim(), studentNo: tr.querySelector(".roster-number").value.trim()
-        }));
-        if (!students.length) return appendMessage({ role: "assistant", content: "名单已清空。请重新上传或粘贴名单。" });
-        if (!students.every(item => /^[\p{Script=Han}·]{2,20}$/u.test(item.name) && /^\d{6,20}$/.test(item.studentNo)) ||
-          new Set(students.map(item => item.studentNo)).size !== students.length) {
-          focusReplyTop(appendMessage({ role: "assistant", content: "表格里有无效姓名、学号或重复学号。请先修改，再点“确认并注册”。" }));
-          return;
-        }
-        if (!window.confirm("确认注册 " + students.length + " 名学生？首次登录密码为 cauc+学号，登录后必须修改。")) return;
-        userReading = false;
-        confirm.disabled = true;
-        appendMessage({ role: "assistant", content: "正在为 " + students.length + " 名学生创建账号…" });
-        scrollEnd();
-        try {
-          const saved = await post("/api/admin/students/auto-register", { students });
-          pendingRoster = null; pendingConfirm = null;
-          const done = appendMessage({ role: "assistant", content: "已注册 " + saved.count + " 名学生。请通过可信渠道通知他们使用学号和 cauc+学号首次登录，并立即修改密码。" });
-          done.querySelector(".mentor-bubble").append(button("查看学生档案", () => { closeMentor(); navigate("admin"); }, "secondary"));
-          focusReplyTop(done);
-        } catch (error) {
-          confirm.disabled = false;
-          focusReplyTop(appendMessage({ role: "assistant", content: "注册未完成：" + error.message + "。请修正表格后重试。" }));
-        }
-      };
-      pendingConfirm = confirmAction;
-      body.append(tableWrap(table), confirm);
-      focusReplyTop(row);
-    };
-    const showCounselorRosterPreview = result => {
-      const deleting = workflowMode === "counselor-delete";
-      const row = appendMessage({ role: "assistant", content: deleting
-        ? "我识别到 " + result.rows.length + " 名辅导员。请核对后确认删除（此操作不可恢复）。"
-        : "我识别到 " + result.rows.length + " 名辅导员。请核对、修改或移除记录，确认后才会创建账号。" });
-      row.classList.add("roster-message");
-      const body = row.querySelector(".mentor-bubble");
-      if (result.issues.length) body.append(make("p", { className: "roster-issues", text: "需要核对：" + result.issues.slice(0, 5).join("；") }));
-      const table = make("table", { className: "data roster-table" },
-        make("thead", {}, make("tr", {}, ["姓名", "用户名", "操作"].map(label => make("th", { text: label })))),
-        make("tbody", {}, result.rows.map(item => make("tr", { className: "roster-row" },
-          make("td", {}, make("input", { className: "roster-name", value: item.name, "aria-label": "辅导员姓名" })),
-          make("td", {}, make("input", { className: "roster-number", value: item.username, "aria-label": "用户名" })),
-          make("td", {}, button("移除", event => event.currentTarget.closest("tr").remove(), "secondary"))))));
-      let confirmAction;
-      const confirm = button(deleting ? "确认删除" : "确认并注册", () => confirmAction(), "btn");
-      pendingRoster = table;
-      confirmAction = async () => {
-        if ((workflowMode !== "counselor-register" && workflowMode !== "counselor-delete") || pendingRoster !== table || confirm.disabled) return;
-        const rows = Array.from(table.querySelectorAll(".roster-row"), tr => ({
-          name: tr.querySelector(".roster-name").value.trim(), username: tr.querySelector(".roster-number").value.trim()
-        }));
-        if (!rows.length) return appendMessage({ role: "assistant", content: "名单已清空。请重新上传或粘贴名单。" });
-        const valid = rows.every(item => (/^[\p{Script=Han}·]{2,20}$/u.test(item.name) || deleting) && /^[a-zA-Z0-9_.-]{3,40}$/.test(item.username))
-          && new Set(rows.map(item => item.username.toLowerCase())).size === rows.length;
-        if (!valid) { focusReplyTop(appendMessage({ role: "assistant", content: "表格里有无效姓名、用户名或重复用户名。请先修改，再点确认。" })); return; }
-        if (!window.confirm(deleting ? "确认删除这 " + rows.length + " 名辅导员？" : "确认注册 " + rows.length + " 名辅导员？首次登录密码为 cauc+用户名，登录后必须修改。")) return;
-        userReading = false;
-        confirm.disabled = true;
-        appendMessage({ role: "assistant", content: deleting ? "正在删除辅导员…" : "正在创建辅导员账号…" });
-        scrollEnd();
-        try {
-          if (deleting) {
-            const saved = await post("/api/admin/counselors/bulk-delete", { usernames: rows.map(item => item.username) });
-            pendingRoster = null; pendingConfirm = null;
-            focusReplyTop(appendMessage({ role: "assistant", content: "已删除 " + saved.count + " 名辅导员。" }));
-          } else {
-            const departmentId = counselorDeptSelect ? counselorDeptSelect.value : null;
-            if (!departmentId) { confirm.disabled = false; focusReplyTop(appendMessage({ role: "assistant", content: "请先选择辅导员所属院系。" })); return; }
-            const saved = await post("/api/admin/counselors/auto-register", { departmentId: Number(departmentId), counselors: rows });
-            pendingRoster = null; pendingConfirm = null;
-            const done = appendMessage({ role: "assistant", content: "已注册 " + saved.count + " 名辅导员。请通知他们使用用户名和 cauc+用户名 首次登录，并立即修改密码。" });
-            done.querySelector(".mentor-bubble").append(button("查看辅导员", () => { closeMentor(); navigate("admin"); }, "secondary"));
-            focusReplyTop(done);
-          }
-        } catch (error) {
-          confirm.disabled = false;
-          focusReplyTop(appendMessage({ role: "assistant", content: (deleting ? "删除未完成：" : "注册未完成：") + error.message + "。请修正后重试。" }));
-        }
-      };
-      pendingConfirm = confirmAction;
-      body.append(tableWrap(table), confirm);
-      focusReplyTop(row);
-    };
-    const handleRosterSubmit = async (question, file) => {
-      userReading = false;
-      if (!file && !question) { focusReplyTop(appendMessage({ role: "assistant", content: rosterPrompt() })); return; }
-      if (log.contains(empty)) empty.remove();
-      appendMessage({ role: "user", content: file ? "上传名单：" + file.name : question });
-      textarea.value = ""; textarea.blur(); resize();
-      if (!file && /^(确认|确认注册|确认删除|开始注册|开始删除)$/.test(question) && pendingConfirm) { await pendingConfirm(); return; }
-      pendingRoster = null; pendingConfirm = null;
-      const loading = appendMessage({ role: "assistant", content: file ? "正在读取名单…" : "正在识别名单文字…" });
-      const release = busy(form);
-      attach.disabled = true;
-      playGirlTyping(); scrollEnd();
-      try {
-        const text = file ? await extractRosterText(file) : question;
-        if (!alive()) return;
-        if (workflowMode === "auto-register") {
-          const result = parseRosterText(text);
-          loading.remove();
-          if (!result.rows.length) focusReplyTop(appendMessage({ role: "assistant", content: "暂时没识别到有效的姓名和学号。请上传名单，或按“张三 123456789”每行一人粘贴后发送。" }));
-          else if (result.rows.length > 50) focusReplyTop(appendMessage({ role: "assistant", content: "识别到 " + result.rows.length + " 人；一次最多注册 50 人。请把名单拆分后重新上传。" }));
-          else showRosterPreview(result);
-        } else {
-          const result = parseCounselorRoster(text);
-          loading.remove();
-          if (!result.rows.length) focusReplyTop(appendMessage({ role: "assistant", content: "暂时没识别到有效的用户名。请上传名单，或每行粘贴“姓名 用户名”。" }));
-          else if (result.rows.length > 50) focusReplyTop(appendMessage({ role: "assistant", content: "识别到 " + result.rows.length + " 人；一次最多处理 50 人。请把名单拆分后重试。" }));
-          else showCounselorRosterPreview(result);
-        }
-        if (file) clearFile();
-      } catch (error) { loading.remove(); focusReplyTop(appendMessage({ role: "assistant", content: "名单读取失败：" + error.message + "。请换文件或直接粘贴名单文字。" })); }
-      finally { playGirlBack(); release(); attach.disabled = false; }
-    };
     const handleOfficeSubmit = async (question, files) => {
       if (!question && !files.length) return;
       if (pendingOfficeButton) pendingOfficeButton.disabled = true;
@@ -619,10 +453,13 @@ function mentorPage() {
       const loading = appendMessage({ role: "assistant", content: "正在整理可执行的任务清单…" });
       const release = busy(form);
       attach.disabled = true;
-      textarea.value = ""; textarea.blur(); resize(); scrollEnd();
+      textarea.value = ""; textarea.blur(); resize(); playGirlTyping(); scrollEnd();
       try {
         let documentText = "";
-        if (files.length && /登记学生|注册学生|名单|更新数据|更新档案|批量修改/.test(question)) {
+        const task = [...officeHistory.filter(item => item.role === "user").slice(-2).map(item => item.content), question].join("\n");
+        if (files.length && !/归档|资料下载|上传.*表格/.test(question) &&
+          (/名单|登记|注册|添加辅导员|删除辅导员|更新|修改|导入/.test(task) ||
+          files.every(file => /\.(xlsx|csv|txt)$/i.test(file.name)) && !/上传|归档|资料下载/.test(task))) {
           for (const file of files) {
             if (/\.(xlsx|csv|txt|docx|pdf)$/i.test(file.name)) documentText += "\n文件：" + file.name + "\n" + (await extractRosterText(file)).slice(0, 10000);
           }
@@ -631,7 +468,7 @@ function mentorPage() {
         if (!alive()) return;
         officeHistory.push({ role: "user", content: question }, { role: "assistant", content: result.answer });
         loading.remove();
-        const row = appendMessage({ role: "assistant", content: result.answer + (result.plan ? "\n\n**待确认操作**\n" + result.plan.preview : "") });
+        const row = appendMessage({ role: "assistant", content: result.answer + (result.plan ? "\n\n待确认操作\n" + result.plan.preview : "") });
         if (result.plan) {
           pendingOfficePlan = result.plan.id;
           const plannedFiles = files.slice();
@@ -639,7 +476,9 @@ function mentorPage() {
             if (pendingOfficePlan !== result.plan.id || confirm.disabled) return;
             confirm.disabled = true;
             const progress = appendMessage({ role: "assistant", content: "正在执行已确认的任务…" });
-            scrollEnd();
+            const releaseExecution = busy(form);
+            attach.disabled = true;
+            playGirlTyping(); scrollEnd();
             try {
               let outcome, temporaryPassword;
               if (result.plan.type === "reset_password") {
@@ -656,27 +495,27 @@ function mentorPage() {
               progress.remove();
               pendingOfficePlan = null;
               pendingOfficeButton = null;
+              officeHistory = [];
               clearFile();
-              focusReplyTop(appendMessage({ role: "assistant", content: outcome.message + (temporaryPassword ? "\n\n**本次临时密码（仅显示在此处）：** `" + temporaryPassword + "`" : "") }));
+              focusReplyTop(appendMessage({ role: "assistant", content: outcome.message + (temporaryPassword ? "\n\n本次临时密码（仅显示在此处）： " + temporaryPassword : "") }));
             } catch (error) {
               progress.remove();
               confirm.disabled = false;
               focusReplyTop(appendMessage({ role: "assistant", content: "执行未完成：" + error.message + "。请核对后重试。" }));
-            }
+            } finally { playGirlBack(); releaseExecution(); attach.disabled = false; }
           }, "btn");
           pendingOfficeButton = confirm;
           row.querySelector(".mentor-bubble").append(confirm);
         }
         focusReplyTop(row);
       } catch (error) { loading.remove(); focusReplyTop(appendMessage({ role: "assistant", content: error.message + "。请补充信息后重试。" })); }
-      finally { release(); attach.disabled = false; }
+      finally { playGirlBack(); release(); attach.disabled = false; }
     };
     form.addEventListener("submit", async event => {
       event.preventDefault();
       const question = form.elements.question.value.trim();
       const file = selectedFile;
-      if (workflowMode === "office") { await handleOfficeSubmit(question, selectedFiles); return; }
-      if (workflowMode !== "chat") { await handleRosterSubmit(question, file); return; }
+      if (staffAgent) { await handleOfficeSubmit(question, selectedFiles); return; }
       if (!file && question.length < 2) { textarea.setCustomValidity("请输入至少两个字的问题"); textarea.reportValidity(); textarea.setCustomValidity(""); return; }
       const release = busy(form);
       attach.disabled = true;

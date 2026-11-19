@@ -289,14 +289,7 @@
 .mentor-source { padding: 11px 0; border-top: 1px solid #f5eff0; font-size: 12px; }
 .mentor-source strong { display: block; margin-bottom: 4px; }
 .mentor-source p { margin: 0; color: var(--mentor-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
-.office-avatar {
-  position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
-  display: grid; place-items: center; width: 60px; height: 60px;
-  border: 1px solid rgba(165,31,45,.28); border-radius: 16px;
-  background: linear-gradient(145deg, #fff, #f9eef0); color: #a51f2d;
-  font-size: 19px; font-weight: 700; letter-spacing: .12em;
-  box-shadow: 0 8px 24px rgba(165,31,45,.08);
-}
+.office-agent .mentor-message { white-space: pre-wrap; }
 .office-agent .mentor-bubble > .btn { margin-top: 14px; width: auto; }
 
 .mentor-composer { width: min(100% - 48px, 780px); margin: 0 auto; padding: 9px 0 18px; background: #fff; }
@@ -377,16 +370,3 @@
   .mentor-app *, .mentor-app *::before, .mentor-app *::after,
   .mentor-fab, .mentor-panel, .mentor-panel * { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
-
-.mentor-workflow-bar { display: flex; align-items: center; gap: 18px; width: min(100% - 48px, 780px); margin: 0 auto; padding: 9px 0 0; border-top: 1px solid var(--mentor-line); color: var(--mentor-ink); font-size: 12px; }
-.mentor-workflow-toggle, .mentor-workflow-choice { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; white-space: nowrap; }
-.mentor-workflow-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent, #a51f2d); }
-.mentor-workflow-choice select { min-width: 112px; min-height: 31px; padding: 4px 24px 4px 9px; border: 1px solid var(--mentor-line); border-radius: 7px; background: #fff; color: var(--mentor-ink); font-size: 12px; }
-.mentor-workflow-choice select:disabled { opacity: .5; cursor: not-allowed; }
-.roster-message .mentor-bubble { width: min(100%, 780px); max-width: 780px; }
-.roster-message .data-wrap { max-width: 100%; overflow-x: auto; margin: 16px 0; }
-.roster-message .roster-issues { color: #a51f2d; font-size: 13px; line-height: 1.6; }
-.roster-table { min-width: 430px; }
-.roster-table input { min-width: 0; width: 100%; padding: 8px; }
-.roster-message .btn { margin-top: 4px; }
-@media (max-width: 700px) { .mentor-workflow-bar { width: calc(100% - 24px); gap: 12px; padding-top: 7px; } .mentor-workflow-choice select { min-width: 98px; } }
