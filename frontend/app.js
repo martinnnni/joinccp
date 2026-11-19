@@ -24,7 +24,7 @@ const make = (tag, props = {}, ...children) => {
   }
   return node;
 };
-const mentorTitle = () => (me && (me.role === "counselor" || me.role === "admin")) ? "办公助理" : "成长导师";
+const mentorTitle = () => (me && (me.role === "counselor" || me.role === "admin")) ? "知行 · 办公助理" : "成长导师";
 const mentorErrorText = (code, message) => "错误代码 " + code + "：" + message + "。请将错误代码报告给你的导员和支持部门。";
 const renderMarkdown = src => {
   const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -311,7 +311,8 @@ function mentorGirl() {
 }
 
 function mentorPage() {
-  const shell = make("div", { className: "mentor-app" }, notice("正在打开成长导师…"));
+  const staffAgent = me?.role === "counselor" || me?.role === "admin";
+  const shell = make("div", { className: "mentor-app" + (staffAgent ? " office-agent" : "") }, notice("正在打开" + (staffAgent ? "办公助理" : "成长导师") + "…"));
   (async () => { try {
     const epoch = mentorEpoch;
     const alive = () => epoch === mentorEpoch;
@@ -324,11 +325,12 @@ function mentorPage() {
     const navLinks = () => links.map(([page, label]) => make("a", { href: "#" + page, text: label, onclick: closeMentor }));
     const log = make("div", { className: "mentor-thread", role: "log", "aria-live": "polite", "aria-label": "成长导师对话", tabindex: "0" });
     const empty = make("div", { className: "mentor-empty" },
-      make("span", { className: "mentor-kicker", text: (me && (me.role === "counselor" || me.role === "admin")) ? "OFFICE ASSISTANT / 办公助理" : "GROWTH MENTOR / 成长导师" }),
-      make("h1", { text: "今天想了解什么？" }),
-      make("p", { text: "从培养流程到写作思路，直接说出你的问题。" }));
+      make("span", { className: "mentor-kicker", text: staffAgent ? "ZHI XING / OFFICE ASSISTANT" : "GROWTH MENTOR / 成长导师" }),
+      make("h1", { text: staffAgent ? "今天想处理什么？" : "今天想了解什么？" }),
+      make("p", { text: staffAgent ? "告诉我任务，或上传名单与文件。我会整理执行清单，待你确认后处理。" : "从培养流程到写作思路，直接说出你的问题。" }));
     const prompts = make("div", { className: "mentor-prompts" },
-      ["我现在处于哪个入党阶段？", "我交了哪些材料，还有哪些没交？", "这个系统怎么使用？", "入党申请书如何组织结构？"].map(question => button(question, () => { textarea.value = question; form.requestSubmit(); }, "mentor-prompt")));
+      (staffAgent ? ["批量登记学生", "批量更新学生档案", "上传培养表格", "为学生重置密码"] : ["我现在处于哪个入党阶段？", "我交了哪些材料，还有哪些没交？", "这个系统怎么使用？", "入党申请书如何组织结构？"])
+        .map(question => button(question, () => { textarea.value = question; form.requestSubmit(); }, "mentor-prompt")));
     empty.append(prompts);
     const sourceView = sources => make("details", { className: "mentor-sources" },
       make("summary", { text: "查看依据 · " + sources.length + " 条" }),
@@ -343,22 +345,35 @@ function mentorPage() {
       if (item.sources?.length) body.append(sourceView(item.sources));
       row.append(body); log.append(row); return row;
     };
-    const textarea = make("textarea", { name: "question", rows: "1", maxlength: "500", required: "", "aria-label": "向成长导师提问", placeholder: status.enabled ? "向成长导师提问…" : "检索培养资料…" });
+    const textarea = make("textarea", { name: "question", rows: "1", maxlength: "1000", required: "", "aria-label": staffAgent ? "向办公助理描述任务" : "向成长导师提问", placeholder: staffAgent ? "描述要完成的办公任务…" : status.enabled ? "向成长导师提问…" : "检索培养资料…" });
     const send = make("button", { type: "submit", className: "mentor-send", "aria-label": "发送问题", title: "发送问题" }, icon("M4 12 20 4 14 20 11 13 4 12Z M11 13 20 4", "发送"));
-    let workflowMode = "chat";
+    let workflowMode = staffAgent ? "office" : "chat";
     let pendingRoster = null;
+    let pendingOfficePlan = null;
+    let pendingOfficeButton = null;
+    let officeHistory = [];
     const rosterPrompt = () => workflowMode === "counselor-register"
       ? "请上传或粘贴辅导员名单，每行“姓名 用户名”。选择院系后，我会先列出识别结果，等你确认后再创建账号。"
       : workflowMode === "counselor-delete"
         ? "请上传或粘贴要删除的辅导员用户名，每行一个。我会先列出识别结果，等你确认后再删除。"
         : "请上传 Excel、Word 或 PDF 入围名单。也可以直接粘贴“姓名 学号”，每行一人；我会先列出识别结果，等你确认后再注册。";
     let selectedFile = null;
+    let selectedFiles = [];
     const fileInput = make("input", { type: "file", accept: ".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document", className: "mentor-file-input", "aria-label": "选择 Word DOCX 或 PDF 文件" });
     const attachment = make("div", { className: "mentor-attachment", hidden: "" });
-    const clearFile = () => { selectedFile = null; fileInput.value = ""; attachment.hidden = true; attachment.replaceChildren(); textarea.required = true; };
+    const clearFile = () => { selectedFile = null; selectedFiles = []; fileInput.value = ""; attachment.hidden = true; attachment.replaceChildren(); textarea.required = true; };
     const attach = make("button", { type: "button", className: "mentor-attach", "aria-label": "上传 Word 或 PDF 文件", title: "上传 Word DOCX 或 PDF" }, icon("M8 12.5 14.5 6a3 3 0 0 1 4.2 4.2l-8.1 8.1a5 5 0 0 1-7.1-7.1l8.4-8.4", "附件"));
     const acceptFile = file => {
       if (!file) return;
+      if (workflowMode === "office") {
+        const incoming = Array.isArray(file) ? file : [file];
+        if (incoming.length > 10 || incoming.some(item => !/\.(doc|docx|xls|xlsx|pdf|csv|txt)$/i.test(item.name) || item.size < 1 || item.size > 10 * 1024 * 1024)) {
+          clearFile(); appendMessage({ role: "assistant", content: "一次最多选择 10 份文件，每份不超过 10 MB；支持 DOC、DOCX、XLS、XLSX、PDF、CSV、TXT。" }); return;
+        }
+        selectedFiles = incoming; textarea.required = false; attachment.hidden = false;
+        attachment.replaceChildren(make("span", { text: incoming.map(item => item.name).join("、") }), button("移除", clearFile, "mentor-remove-attachment"));
+        return;
+      }
       const allowed = workflowMode !== "chat" ? /\.(xlsx|csv|txt|docx|pdf)$/i : /\.(docx|pdf)$/i;
       if (!allowed.test(file.name) || file.size > 10 * 1024 * 1024 || file.size < 1) {
         clearFile(); appendMessage({ role: "assistant", content: workflowMode !== "chat" ? "名单请上传不超过 10 MB 的 XLSX、CSV、TXT、DOCX 或可搜索 PDF。" : "请上传不超过 10 MB 的 Word DOCX 或 PDF。旧版 .doc 请另存为 .docx。" }); return;
@@ -368,7 +383,7 @@ function mentorPage() {
       if (workflowMode !== "chat") form.requestSubmit();
     };
     attach.addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", () => acceptFile(fileInput.files?.[0]));
+    fileInput.addEventListener("change", () => acceptFile(workflowMode === "office" ? Array.from(fileInput.files || []) : fileInput.files?.[0]));
     const form = make("form", { className: "mentor-composer" }, fileInput, attachment,
       make("div", { className: "mentor-composer-box" }, attach, textarea, send),
       make("p", { className: "mentor-composer-note", text: "校内要求以辅导员通知为准" }));
@@ -376,7 +391,7 @@ function mentorPage() {
     form.addEventListener("dragenter", event => { event.preventDefault(); dragDepth++; form.classList.add("mentor-dragging"); });
     form.addEventListener("dragleave", event => { event.preventDefault(); dragDepth--; if (dragDepth <= 0) { dragDepth = 0; form.classList.remove("mentor-dragging"); } });
     form.addEventListener("dragover", event => { event.preventDefault(); });
-    form.addEventListener("drop", event => { event.preventDefault(); dragDepth = 0; form.classList.remove("mentor-dragging"); acceptFile(event.dataTransfer?.files?.[0]); });
+    form.addEventListener("drop", event => { event.preventDefault(); dragDepth = 0; form.classList.remove("mentor-dragging"); acceptFile(workflowMode === "office" ? Array.from(event.dataTransfer?.files || []) : event.dataTransfer?.files?.[0]); });
     let userReading = false;
     for (const type of ["wheel", "touchstart", "pointerdown", "keydown"]) log.addEventListener(type, () => { userReading = true; }, { passive: true });
     const scrollEnd = () => { log.scrollTop = log.scrollHeight; };
@@ -387,11 +402,11 @@ function mentorPage() {
       log.scrollTop += offset - padding - 10;
     };
     const reset = () => {
-      mentorHistory = []; pendingRoster = null; pendingConfirm = null; userReading = false; log.replaceChildren();
-      if (workflowMode !== "chat") appendMessage({ role: "assistant", content: rosterPrompt() });
+      mentorHistory = []; officeHistory = []; pendingRoster = null; pendingOfficePlan = null; pendingOfficeButton = null; pendingConfirm = null; userReading = false; log.replaceChildren();
+      if (workflowMode !== "chat" && workflowMode !== "office") appendMessage({ role: "assistant", content: rosterPrompt() });
       else log.append(empty);
       textarea.value = ""; clearFile();
-      if (workflowMode === "chat") textarea.focus(); else textarea.blur();
+      if (workflowMode === "chat" || workflowMode === "office") textarea.focus(); else textarea.blur();
     };
     const newChat = () => button("新对话", reset, "mentor-new-chat");
     const aside = make("aside", { className: "mentor-sidebar" },
@@ -419,7 +434,7 @@ function mentorPage() {
       [4, 3, 2, 1, 0].forEach((n, idx) => { girlTimers.push(setTimeout(() => setGirlFrame(n), idx * 180)); });
     };
     const hero = make("div", { className: "mentor-hero" },
-      make("div", { className: "mentor-girl", "aria-hidden": "true" }, girlImg),
+      staffAgent ? make("div", { className: "office-avatar", "aria-hidden": "true", text: "知行" }) : make("div", { className: "mentor-girl", "aria-hidden": "true" }, girlImg),
       make("div", { className: "mentor-titlebox" },
         make("strong", { text: mentorTitle() }),
         make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })));
@@ -440,19 +455,21 @@ function mentorPage() {
       ...(counselorDeptSelect ? [make("label", { className: "mentor-workflow-choice" }, make("span", { text: "院系" }), counselorDeptSelect)] : [])) : null;
     const syncWorkflow = () => {
       workflowChoice.disabled = !workflowToggle.checked;
-      workflowMode = workflowToggle.checked ? workflowChoice.value : "chat";
+      workflowMode = workflowToggle.checked ? workflowChoice.value : "office";
       const roster = workflowMode !== "chat";
-      fileInput.accept = roster ? ".xlsx,.csv,.txt,.docx,.pdf" : ".docx,.pdf";
-      fileInput.setAttribute("aria-label", roster ? "上传名单" : "选择 Word DOCX 或 PDF 文件");
-      attach.setAttribute("aria-label", roster ? "上传名单" : "上传 Word 或 PDF 文件");
-      attach.title = roster ? "上传 XLSX、CSV、TXT、DOCX 或 PDF 名单" : "上传 Word DOCX 或 PDF";
-      textarea.placeholder = roster
+      fileInput.multiple = workflowMode === "office";
+      fileInput.accept = workflowMode === "office" ? ".doc,.docx,.xls,.xlsx,.pdf,.csv,.txt" : roster ? ".xlsx,.csv,.txt,.docx,.pdf" : ".docx,.pdf";
+      fileInput.setAttribute("aria-label", workflowMode === "office" ? "选择办公任务文件" : roster ? "上传名单" : "选择 Word DOCX 或 PDF 文件");
+      attach.setAttribute("aria-label", workflowMode === "office" ? "选择办公任务文件" : roster ? "上传名单" : "上传 Word 或 PDF 文件");
+      attach.title = workflowMode === "office" ? "选择最多 10 份文件" : roster ? "上传 XLSX、CSV、TXT、DOCX 或 PDF 名单" : "上传 Word DOCX 或 PDF";
+      textarea.placeholder = workflowMode === "office" ? "描述要完成的办公任务…" : roster
         ? (workflowMode === "auto-register" ? "也可粘贴名单，每行：姓名 学号" : workflowMode === "counselor-register" ? "也可粘贴名单，每行：姓名 用户名" : "也可粘贴名单，每行：用户名")
         : status.enabled ? "向成长导师提问…" : "检索培养资料…";
       if (counselorDeptSelect) counselorDeptSelect.disabled = !workflowToggle.checked || workflowMode !== "counselor-register";
       reset();
     };
     if (workflow) { workflowToggle.addEventListener("change", syncWorkflow); workflowChoice.addEventListener("change", syncWorkflow); }
+    if (staffAgent) { fileInput.multiple = true; fileInput.accept = ".doc,.docx,.xls,.xlsx,.pdf,.csv,.txt"; }
     const content = make("div", { className: "mentor-content" }, log, workflow, form);
     shell.replaceChildren(aside, make("section", { className: "mentor-main", "aria-label": "成长导师" }, hero, header, content));
     if (mentorHistory.length) for (const item of mentorHistory) appendMessage(item); else log.append(empty);
@@ -591,10 +608,74 @@ function mentorPage() {
       } catch (error) { loading.remove(); focusReplyTop(appendMessage({ role: "assistant", content: "名单读取失败：" + error.message + "。请换文件或直接粘贴名单文字。" })); }
       finally { playGirlBack(); release(); attach.disabled = false; }
     };
+    const handleOfficeSubmit = async (question, files) => {
+      if (!question && !files.length) return;
+      if (pendingOfficeButton) pendingOfficeButton.disabled = true;
+      pendingOfficeButton = null;
+      pendingOfficePlan = null;
+      userReading = false;
+      if (log.contains(empty)) empty.remove();
+      appendMessage({ role: "user", content: question + (files.length ? "\n附件：" + files.map(file => file.name).join("、") : "") });
+      const loading = appendMessage({ role: "assistant", content: "正在整理可执行的任务清单…" });
+      const release = busy(form);
+      attach.disabled = true;
+      textarea.value = ""; textarea.blur(); resize(); scrollEnd();
+      try {
+        let documentText = "";
+        if (files.length && /登记学生|注册学生|名单|更新数据|更新档案|批量修改/.test(question)) {
+          for (const file of files) {
+            if (/\.(xlsx|csv|txt|docx|pdf)$/i.test(file.name)) documentText += "\n文件：" + file.name + "\n" + (await extractRosterText(file)).slice(0, 10000);
+          }
+        }
+        const result = await post("/api/office/plan", { question, documentText: documentText.slice(0, 25000), files: files.map(file => ({ name: file.name })), history: officeHistory.slice(-6) });
+        if (!alive()) return;
+        officeHistory.push({ role: "user", content: question }, { role: "assistant", content: result.answer });
+        loading.remove();
+        const row = appendMessage({ role: "assistant", content: result.answer + (result.plan ? "\n\n**待确认操作**\n" + result.plan.preview : "") });
+        if (result.plan) {
+          pendingOfficePlan = result.plan.id;
+          const plannedFiles = files.slice();
+          const confirm = button("确认执行", async () => {
+            if (pendingOfficePlan !== result.plan.id || confirm.disabled) return;
+            confirm.disabled = true;
+            const progress = appendMessage({ role: "assistant", content: "正在执行已确认的任务…" });
+            scrollEnd();
+            try {
+              let outcome, temporaryPassword;
+              if (result.plan.type === "reset_password") {
+                temporaryPassword = randomHex(12);
+                const newSalt = randomHex(16), newVerifier = await derive(temporaryPassword, newSalt);
+                outcome = await post("/api/office/execute", { planId: result.plan.id, newSalt, newVerifier });
+              } else if (result.plan.type === "upload_forms" || result.plan.type === "upload_student_files") {
+                const body = new FormData();
+                body.append("planId", result.plan.id);
+                plannedFiles.forEach(file => body.append("file", file, file.name));
+                outcome = await api("/api/office/execute", { method: "POST", body });
+              } else outcome = await post("/api/office/execute", { planId: result.plan.id });
+              if (!alive()) return;
+              progress.remove();
+              pendingOfficePlan = null;
+              pendingOfficeButton = null;
+              clearFile();
+              focusReplyTop(appendMessage({ role: "assistant", content: outcome.message + (temporaryPassword ? "\n\n**本次临时密码（仅显示在此处）：** `" + temporaryPassword + "`" : "") }));
+            } catch (error) {
+              progress.remove();
+              confirm.disabled = false;
+              focusReplyTop(appendMessage({ role: "assistant", content: "执行未完成：" + error.message + "。请核对后重试。" }));
+            }
+          }, "btn");
+          pendingOfficeButton = confirm;
+          row.querySelector(".mentor-bubble").append(confirm);
+        }
+        focusReplyTop(row);
+      } catch (error) { loading.remove(); focusReplyTop(appendMessage({ role: "assistant", content: error.message + "。请补充信息后重试。" })); }
+      finally { release(); attach.disabled = false; }
+    };
     form.addEventListener("submit", async event => {
       event.preventDefault();
       const question = form.elements.question.value.trim();
       const file = selectedFile;
+      if (workflowMode === "office") { await handleOfficeSubmit(question, selectedFiles); return; }
       if (workflowMode !== "chat") { await handleRosterSubmit(question, file); return; }
       if (!file && question.length < 2) { textarea.setCustomValidity("请输入至少两个字的问题"); textarea.reportValidity(); textarea.setCustomValidity(""); return; }
       const release = busy(form);

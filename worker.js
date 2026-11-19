@@ -4,6 +4,7 @@ import { classifyIntent, decideMentorRoute, chitchatMessages, isIdentityQuestion
 import { isPersonalQuestion, isSiteHelpQuestion, personalMatches, isSelfIdentityQuestion, isChineseQuestion, isPartyDomainQuestion } from "./mentor-personal.js";
 import { identifyMessages, parseIdentification, reviewMessages, parseReview, formatReview } from "./mentor-review.js";
 import { isCurrentTimeQuestion, getCurrentTime } from "./mentor-time.js";
+import { officeMessages, parseOfficePlan } from "./office-agent.js";
 
 const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), {
   status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...extra }
@@ -167,9 +168,9 @@ async function authRoutes(request, env, path) {
     const username = clean(data.username, 40), verifier = clean(data.verifier, 64);
     assert(validName(username) && validHex(verifier, 64), "账号资料无效");
     const limitKey = await loginLimit(env, request, username, true);
-    const row = await env.DB.prepare("SELECT id,password_verifier,must_change_password FROM users WHERE username=? COLLATE NOCASE").bind(username).first();
+    const row = await env.DB.prepare("SELECT id,password_verifier,must_change_password,reset_password FROM users WHERE username=? COLLATE NOCASE").bind(username).first();
     const initialPassword = clean(data.initialPassword, 100);
-    const got = row?.must_change_password
+    const got = row?.must_change_password && !row?.reset_password
       ? await hmac(env.AUTH_PEPPER, "initial:" + username.toLowerCase() + ":" + initialPassword)
       : await hmac(env.AUTH_PEPPER, username.toLowerCase() + ":" + verifier);
     assert(row && equal(row.password_verifier, got), "用户名或密码错误", 401);
@@ -188,17 +189,17 @@ async function changePassword(request, env, user) {
   requireSecret(env);
   const data = await bodyJson(request);
   assert(validHex(data.newVerifier, 64) && validHex(data.newSalt, 32), "密码资料无效");
-  const row = await env.DB.prepare("SELECT password_verifier,must_change_password FROM users WHERE id=?").bind(user.id).first();
-  const old = row?.must_change_password
+  const row = await env.DB.prepare("SELECT password_verifier,must_change_password,reset_password FROM users WHERE id=?").bind(user.id).first();
+  const old = row?.must_change_password && !row?.reset_password
     ? await hmac(env.AUTH_PEPPER, "initial:" + user.username.toLowerCase() + ":" + clean(data.oldPassword, 100))
     : await hmac(env.AUTH_PEPPER, user.username.toLowerCase() + ":" + data.oldVerifier);
   assert(row && equal(row.password_verifier, old), "当前密码错误", 403);
-  if (row.must_change_password) {
+  if (row.must_change_password && !row.reset_password) {
     assert(clean(data.oldPassword, 100) === "cauc+" + user.username, "初始密码错误", 403);
     assert(clean(data.newPassword, 100) && clean(data.newPassword, 100) !== data.oldPassword, "新密码不能与初始密码相同");
   } else assert(validHex(data.oldVerifier, 64), "密码资料无效");
   const replacement = await hmac(env.AUTH_PEPPER, user.username.toLowerCase() + ":" + data.newVerifier);
-  await env.DB.prepare("UPDATE users SET password_salt=?,password_verifier=?,must_change_password=0 WHERE id=?").bind(data.newSalt, replacement, user.id).run();
+  await env.DB.prepare("UPDATE users SET password_salt=?,password_verifier=?,must_change_password=0,reset_password=0 WHERE id=?").bind(data.newSalt, replacement, user.id).run();
   const tokenHash = await sha256(sessionCookie(request));
   await env.DB.prepare("DELETE FROM sessions WHERE user_id=? AND token_hash<>?").bind(user.id, tokenHash).run();
   return json({ ok: true });
@@ -473,12 +474,7 @@ export async function checkRoutes(request, env, path, user) {
     }
     const object = await env.FILES.get(row.r2_key);
     assert(object, "文件不存在", 404);
-    const filename = encodeURIComponent(row.filename.replace(/[\r\n"]/g, ""));
-    return new Response(object.body, { headers: {
-      "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "content-disposition": "attachment; filename*=UTF-8''" + filename,
-      "cache-control": "private, no-store"
-    } });
+    return fileResponse(object, row.filename, formType(row.filename)?.mime || "application/octet-stream");
   }
   return null;
 }
@@ -826,6 +822,220 @@ export async function adminRoutes(request, env, path, user) {
   return null;
 }
 
+async function officeStudent(env, user, identifier) {
+  const value = clean(identifier, 50);
+  assert(value, "请提供学生姓名或学号");
+  const rows = user.role === "admin"
+    ? await env.DB.prepare("SELECT u.id,u.username,u.department_id,p.name,p.student_no FROM users u JOIN profiles p ON p.user_id=u.id WHERE u.role='student' AND (p.student_no=? OR p.name=?) LIMIT 3").bind(value, value).all()
+    : await env.DB.prepare("SELECT u.id,u.username,u.department_id,p.name,p.student_no FROM users u JOIN profiles p ON p.user_id=u.id WHERE u.role='student' AND u.department_id=? AND (p.student_no=? OR p.name=?) LIMIT 3").bind(user.department_id, value, value).all();
+  assert(rows.results.length, "找不到可管理的学生：" + value, 404);
+  assert(rows.results.length === 1, "姓名“" + value + "”对应多位学生，请使用学号", 409);
+  return rows.results[0];
+}
+
+async function normalizeOfficeAction(env, user, action, files) {
+  const type = action.type;
+  if (type === "register_students") {
+    const departmentId = user.role === "admin" ? Number(action.departmentId) : user.department_id;
+    assert(Number.isSafeInteger(departmentId) && departmentId > 0, "管理员请说明学生所属院系");
+    assert(await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(departmentId).first(), "院系不存在", 404);
+    const students = action.students.map(item => ({ name: clean(item.name, 50), studentNo: clean(item.studentNo, 40) }));
+    assert(students.every(item => /^[\p{Script=Han}·]{2,20}$/u.test(item.name) && /^\d{6,20}$/.test(item.studentNo)), "名单须包含有效的姓名和学号");
+    assert(new Set(students.map(item => item.studentNo)).size === students.length, "名单中有重复学号");
+    const existing = await env.DB.prepare("SELECT username FROM users WHERE username IN (" + students.map(() => "?").join(",") + ")").bind(...students.map(item => item.studentNo)).all();
+    assert(!existing.results.length, "以下学号已有账号：" + existing.results.map(item => item.username).join("、"), 409);
+    return { type, departmentId, students, preview: "将注册 " + students.length + " 名学生：" + students.map(item => item.name + "（" + item.studentNo + "）").join("、") + "。初始密码为 cauc+学号，首次登录强制修改。" };
+  }
+  if (type === "reset_password") {
+    const student = await officeStudent(env, user, action.student);
+    return { type, studentId: student.id, studentNo: student.student_no, preview: "将重置 " + student.name + "（" + student.student_no + "）的密码，并退出该账号所有已登录设备。确认后生成一次性显示的随机临时密码。" };
+  }
+  if (type === "update_students") {
+    assert(action.rows.length <= 20, "一次最多更新 20 名学生");
+    const rows = [];
+    for (const item of action.rows) {
+      const student = await officeStudent(env, user, item.student);
+      const row = { studentId: student.id, studentNo: student.student_no, name: student.name };
+      if (item.major !== undefined) row.major = clean(item.major, 100);
+      if (item.grade !== undefined) row.grade = clean(item.grade, 20);
+      if (item.phone !== undefined) {
+        row.phone = clean(item.phone, 20);
+        assert(/^[0-9+()\- ]{0,20}$/.test(row.phone), "联系电话格式无效：" + student.student_no);
+      }
+      if (item.appliedAt !== undefined) {
+        row.appliedAt = clean(item.appliedAt, 10);
+        assert(/^\d{4}-\d{2}-\d{2}$/.test(row.appliedAt) && !Number.isNaN(Date.parse(row.appliedAt)), "申请日期格式无效：" + student.student_no);
+      }
+      if (item.stageSlug !== undefined || item.nodeSlug !== undefined) {
+        const node = item.nodeSlug
+          ? await env.DB.prepare("SELECT slug,stage_slug FROM nodes WHERE slug=?").bind(clean(item.nodeSlug, 80)).first()
+          : await env.DB.prepare("SELECT slug,stage_slug FROM nodes WHERE stage_slug=? ORDER BY position LIMIT 1").bind(clean(item.stageSlug, 80)).first();
+        assert(node && (!item.stageSlug || node.stage_slug === item.stageSlug), "培养阶段或节点无效：" + student.student_no);
+        row.nodeSlug = node.slug; row.stageSlug = node.stage_slug;
+      }
+      if (item.materialName !== undefined || item.status !== undefined) {
+        const material = await env.DB.prepare("SELECT id,name FROM materials WHERE name=?").bind(clean(item.materialName, 100)).first();
+        assert(material, "材料不存在：" + clean(item.materialName, 100), 404);
+        assert(["未交", "已交", "已通过"].includes(item.status), "材料状态无效");
+        row.materialId = material.id; row.materialName = material.name; row.status = item.status;
+      }
+      assert(Object.keys(row).length > 3, "没有可更新的字段：" + student.student_no);
+      rows.push(row);
+    }
+    assert(new Set(rows.map(item => item.studentId)).size === rows.length, "同一学生在清单中重复，请合并后重试");
+    return { type, rows, preview: "将更新 " + rows.length + " 名学生：\n" + rows.map(row => row.name + "（" + row.studentNo + "）：" + [row.major !== undefined && "专业 " + row.major, row.grade !== undefined && "年级 " + row.grade, row.phone !== undefined && "电话 " + row.phone, row.appliedAt && "申请日期 " + row.appliedAt, row.stageSlug && "阶段 " + row.stageSlug, row.materialName && row.materialName + "→" + row.status].filter(Boolean).join("；")).join("\n") };
+  }
+  assert(type === "upload_forms" || type === "upload_student_files", "不支持的办公操作");
+  assert(action.files.length <= 10, "一次最多上传 10 份文件");
+  assert(files.length === action.files.length, "请附上清单中的全部文件");
+  const names = files.map(item => clean(item.name, 150));
+  assert(new Set(names).size === names.length, "文件名重复，请重命名后重试");
+  const rows = [];
+  for (const item of action.files) {
+    const filename = clean(item.filename, 150);
+    assert(names.includes(filename), "缺少文件：" + filename);
+    const fileType = formType(filename);
+    assert(fileType && (type === "upload_forms" || ["docx", "pdf"].includes(filename.split(".").at(-1).toLowerCase())), "文件类型不支持：" + filename);
+    if (type === "upload_forms") {
+      const stage = await env.DB.prepare("SELECT slug,name FROM stages WHERE slug=?").bind(clean(item.stageSlug, 80)).first();
+      assert(stage, "阶段不存在：" + clean(item.stageSlug, 80));
+      const title = clean(item.title, 100);
+      assert(title, "请填写表格名称：" + filename);
+      rows.push({ filename, title, stageSlug: stage.slug, stageName: stage.name });
+    } else {
+      const student = await officeStudent(env, user, item.student);
+      const material = await env.DB.prepare("SELECT id,name FROM materials WHERE name=?").bind(clean(item.materialName, 100)).first();
+      assert(material, "材料不存在：" + clean(item.materialName, 100));
+      rows.push({ filename, studentId: student.id, studentNo: student.student_no, studentName: student.name, materialId: material.id, materialName: material.name });
+    }
+  }
+  assert(new Set(rows.map(item => item.filename)).size === rows.length, "一个文件不能重复上传到多个位置");
+  return { type, rows, preview: "将上传 " + rows.length + " 份文件：\n" + rows.map(row => row.filename + " → " + (type === "upload_forms" ? row.stageName + " / " + row.title : row.studentName + "（" + row.studentNo + "）/ " + row.materialName)).join("\n") };
+}
+
+export async function officeRoutes(request, env, path, user) {
+  if (!path.startsWith("/api/office/")) return null;
+  assert(isStaff(user), "仅辅导员和管理员可使用办公助理", 403);
+  if (path === "/api/office/plan" && request.method === "POST") {
+    const data = await bodyJson(request);
+    const question = clean(data.question, 1000), documentText = clean(data.documentText, 25000);
+    const files = Array.isArray(data.files) ? data.files.slice(0, 11).map(item => ({ name: clean(item?.name, 150) })) : [];
+    const history = Array.isArray(data.history) ? data.history.slice(-6) : [];
+    assert(question || documentText || files.length, "请描述任务或上传文件");
+    if (isIdentityQuestion(question)) return json({ ok: true, answer: "我是中国民航大学理学院独立开发的党员发展辅助系统。作为办公助理，我可以帮你整理和执行已确认的站内任务。", plan: null });
+    assert(env.DEEPSEEK_API_KEY, "办公助理尚未配置 AI 服务", 503);
+    assert(files.length <= 10, "一次最多上传 10 个文件");
+    const catalog = {
+      stages: (await env.DB.prepare("SELECT slug,name FROM stages ORDER BY position").all()).results,
+      materials: (await env.DB.prepare("SELECT name,stage_slug FROM materials ORDER BY id").all()).results,
+      departments: user.role === "admin" ? (await env.DB.prepare("SELECT id,name FROM departments ORDER BY name").all()).results : []
+    };
+    const raw = await deepSeekContent(env, { model: "deepseek-flash", messages: officeMessages(question, documentText, files, user.role, catalog, history), response_format: { type: "json_object" }, reasoning_effort: "none", stream: false, max_tokens: 2800, temperature: 0.1 });
+    let parsed;
+    try { parsed = parseOfficePlan(raw); } catch (error) { return json({ ok: true, answer: error.message + "。请补充具体信息。", plan: null }); }
+    if (!parsed.action) return json({ ok: true, answer: parsed.reply, plan: null });
+    let normalized;
+    try { normalized = await normalizeOfficeAction(env, user, parsed.action, files); }
+    catch (error) { if (error instanceof HttpError) return json({ ok: true, answer: error.message + "。请补充或修正后重试。", plan: null }); throw error; }
+    const planId = randomHex(16);
+    await env.DB.prepare("INSERT INTO office_plans(id,user_id,action_type,payload_json,expires_at) VALUES(?,?,?,?,?)")
+      .bind(planId, user.id, normalized.type, JSON.stringify(normalized), new Date(Date.now() + 15 * 60000).toISOString()).run();
+    return json({ ok: true, answer: parsed.reply, plan: { id: planId, type: normalized.type, preview: normalized.preview, expiresInMinutes: 15 } });
+  }
+  if (path === "/api/office/execute" && request.method === "POST") {
+    const multipart = request.headers.get("content-type")?.includes("multipart/form-data");
+    const data = multipart ? await request.formData() : await bodyJson(request);
+    const planId = clean(multipart ? data.get("planId") : data.planId, 32);
+    assert(validHex(planId, 32), "操作编号无效");
+    const row = await env.DB.prepare("SELECT * FROM office_plans WHERE id=? AND user_id=?").bind(planId, user.id).first();
+    assert(row && row.status === "pending" && row.expires_at > iso(), "操作已执行或已过期，请重新提出任务", 409);
+    const locked = await env.DB.prepare("UPDATE office_plans SET status='running' WHERE id=? AND user_id=? AND status='pending'").bind(planId, user.id).run();
+    assert(locked.meta.changes === 1, "操作已在执行中", 409);
+    const plan = JSON.parse(row.payload_json);
+    try {
+      let result;
+      if (plan.type === "register_students") {
+        requireSecret(env);
+        assert(user.role === "admin" || user.department_id === plan.departmentId, "院系权限已变化，请重新提出任务", 403);
+        const statements = [];
+        for (const student of plan.students) {
+          const salt = randomHex(16), initial = await hmac(env.AUTH_PEPPER, "initial:" + student.studentNo.toLowerCase() + ":cauc+" + student.studentNo);
+          statements.push(env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name,must_change_password) VALUES(?,?,?,'student',?,?,1)").bind(student.studentNo, salt, initial, plan.departmentId, student.name));
+          statements.push(env.DB.prepare("INSERT INTO profiles(user_id,name,student_no,major,grade,phone,applied_at,node_entered_at) SELECT id,?,?, '', '', '', NULL, ? FROM users WHERE username=?").bind(student.name, student.studentNo, iso().slice(0, 10), student.studentNo));
+        }
+        await env.DB.batch(statements);
+        result = { count: plan.students.length, message: "已注册 " + plan.students.length + " 名学生。初始密码为 cauc+学号，首次登录须修改。" };
+      } else if (plan.type === "update_students") {
+        const statements = [];
+        for (const item of plan.rows) {
+          await targetStudent(env, user, item.studentId);
+          if (item.major !== undefined || item.grade !== undefined || item.phone !== undefined || item.appliedAt !== undefined || item.nodeSlug) statements.push(env.DB.prepare("UPDATE profiles SET major=COALESCE(?,major),grade=COALESCE(?,grade),phone=COALESCE(?,phone),applied_at=COALESCE(?,applied_at),current_stage_slug=COALESCE(?,current_stage_slug),current_node_slug=COALESCE(?,current_node_slug),node_entered_at=CASE WHEN ? IS NULL THEN node_entered_at ELSE ? END WHERE user_id=?")
+            .bind(item.major ?? null, item.grade ?? null, item.phone ?? null, item.appliedAt ?? null, item.stageSlug ?? null, item.nodeSlug ?? null, item.nodeSlug ?? null, iso().slice(0, 10), item.studentId));
+          if (item.materialId) statements.push(env.DB.prepare("INSERT INTO material_records(student_id,material_id,status,submitted_at) VALUES(?,?,?,?) ON CONFLICT(student_id,material_id) DO UPDATE SET status=excluded.status,submitted_at=excluded.submitted_at")
+            .bind(item.studentId, item.materialId, item.status, item.status === "未交" ? null : iso()));
+          if (item.nodeSlug) statements.push(env.DB.prepare("INSERT INTO notifications(student_id,kind,title,content) VALUES(?,'lesson',?,?)")
+            .bind(item.studentId, "培养阶段已更新", "你的培养档案已更新，请查看当前阶段与节点。"));
+        }
+        await env.DB.batch(statements);
+        result = { count: plan.rows.length, message: "已更新 " + plan.rows.length + " 名学生的档案。" };
+      } else if (plan.type === "reset_password") {
+        requireSecret(env);
+        const student = await targetStudent(env, user, plan.studentId);
+        const newSalt = clean(data.newSalt, 32), newVerifier = clean(data.newVerifier, 64);
+        assert(validHex(newSalt, 32) && validHex(newVerifier, 64), "临时密码资料无效");
+        const verifier = await hmac(env.AUTH_PEPPER, student.student_no.toLowerCase() + ":" + newVerifier);
+        await env.DB.batch([
+          env.DB.prepare("UPDATE users SET password_salt=?,password_verifier=?,must_change_password=1,reset_password=1 WHERE id=?").bind(newSalt, verifier, student.id),
+          env.DB.prepare("DELETE FROM sessions WHERE user_id=?").bind(student.id)
+        ]);
+        result = { count: 1, message: "密码已重置，原登录会话已退出。请通过可信渠道将临时密码交给学生；首次登录必须修改。" };
+      } else {
+        assert(multipart, "请附上要上传的文件");
+        const uploads = data.getAll("file");
+        assert(uploads.length === plan.rows.length, "文件数量与预览不一致");
+        const byName = new Map(uploads.map(file => [clean(file.name, 150), file]));
+        assert(byName.size === uploads.length, "文件名重复");
+        const prepared = [];
+        for (const item of plan.rows) {
+          const file = byName.get(item.filename), type = formType(item.filename);
+          assert(file && type && file.size > 0 && file.size <= 10 * 1024 * 1024, "文件缺失或超过 10 MB：" + item.filename);
+          const signature = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+          assert(type.magic.every((byte, index) => byte === signature[index]), "文件格式与扩展名不符：" + item.filename);
+          if (plan.type === "upload_student_files") await targetStudent(env, user, item.studentId);
+          const key = plan.type === "upload_forms" ? "forms/" + (user.role === "admin" ? "global" : user.department_id) + "/" + randomHex(16) + "." + item.filename.split(".").at(-1).toLowerCase()
+            : "checks/" + item.studentId + "/" + randomHex(16) + "." + item.filename.split(".").at(-1).toLowerCase();
+          prepared.push({ item, file, type, key });
+        }
+        const uploaded = [];
+        try {
+          for (const entry of prepared) { await env.FILES.put(entry.key, entry.file.stream(), { httpMetadata: { contentType: entry.type.mime } }); uploaded.push(entry.key); }
+          if (plan.type === "upload_forms") await env.DB.batch(prepared.map(entry => env.DB.prepare("INSERT INTO form_templates(stage_slug,department_id,title,filename,r2_key,uploaded_by) VALUES(?,?,?,?,?,?)")
+            .bind(entry.item.stageSlug, user.role === "admin" ? null : user.department_id, entry.item.title, entry.item.filename, entry.key, user.id)));
+          else {
+            const checkIds = [];
+            try {
+              for (const entry of prepared) {
+                const saved = await env.DB.prepare("INSERT INTO checks(student_id,material_id,r2_key,filename) VALUES(?,?,?,?)")
+                  .bind(entry.item.studentId, entry.item.materialId, entry.key, entry.item.filename).run();
+                checkIds.push(saved.meta.last_row_id);
+              }
+              await env.DB.batch(prepared.map(entry => env.DB.prepare("INSERT INTO material_records(student_id,material_id,status,r2_key,filename,submitted_at) VALUES(?,?,'已交',?,?,?) ON CONFLICT(student_id,material_id) DO UPDATE SET status='已交',r2_key=excluded.r2_key,filename=excluded.filename,submitted_at=excluded.submitted_at")
+                .bind(entry.item.studentId, entry.item.materialId, entry.key, entry.item.filename, iso())));
+            } catch (error) { for (const checkId of checkIds) await env.DB.prepare("DELETE FROM checks WHERE id=?").bind(checkId).run(); throw error; }
+          }
+        } catch (error) { await Promise.all(uploaded.map(key => env.FILES.delete(key))); throw error; }
+        result = { count: prepared.length, message: "已将 " + prepared.length + " 份文件上传至预览中列出的指定位置。" };
+      }
+      await env.DB.prepare("UPDATE office_plans SET status='done',result_json=? WHERE id=?").bind(JSON.stringify({ count: result.count }), planId).run();
+      return json({ ok: true, ...result });
+    } catch (error) {
+      await env.DB.prepare("UPDATE office_plans SET status='pending' WHERE id=? AND status='running'").bind(planId).run();
+      throw error;
+    }
+  }
+  return null;
+}
+
 async function scheduled(env) {
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   await env.DB.prepare("INSERT OR IGNORE INTO notifications(student_id,kind,title,content,node_slug) SELECT p.user_id,'deadline','节点提醒：' || n.name,'您当前处于「' || n.name || '」节点，时间要求：' || COALESCE(NULLIF(n.duration_rule,''),'请按计划推进') || '。请及时准备相关材料。',n.slug FROM profiles p JOIN nodes n ON n.slug=p.current_node_slug WHERE p.node_entered_at IS NOT NULL AND n.duration_days>0 AND n.remind_days_before>0 AND date(p.node_entered_at,'+' || (n.duration_days-n.remind_days_before) || ' days')<=date(?)")
@@ -850,7 +1060,8 @@ export default {
       if (!guestMentor) assert(user, "请先登录", 401);
       if (path === "/api/change-password" && request.method === "POST") return secured(await changePassword(request, env, user));
       if (user?.must_change_password && path !== "/api/me") throw new HttpError(403, "首次登录请先修改初始密码");
-      response = await mentorRoutes(request, env, path, user)
+      response = await officeRoutes(request, env, path, user)
+        || await mentorRoutes(request, env, path, user)
         || await studentRoutes(request, env, path, user)
         || await checkRoutes(request, env, path, user)
         || await formRoutes(request, env, path, user)

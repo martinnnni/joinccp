@@ -289,6 +289,15 @@
 .mentor-source { padding: 11px 0; border-top: 1px solid #f5eff0; font-size: 12px; }
 .mentor-source strong { display: block; margin-bottom: 4px; }
 .mentor-source p { margin: 0; color: var(--mentor-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.office-avatar {
+  position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
+  display: grid; place-items: center; width: 60px; height: 60px;
+  border: 1px solid rgba(165,31,45,.28); border-radius: 16px;
+  background: linear-gradient(145deg, #fff, #f9eef0); color: #a51f2d;
+  font-size: 19px; font-weight: 700; letter-spacing: .12em;
+  box-shadow: 0 8px 24px rgba(165,31,45,.08);
+}
+.office-agent .mentor-bubble > .btn { margin-top: 14px; width: auto; }
 
 .mentor-composer { width: min(100% - 48px, 780px); margin: 0 auto; padding: 9px 0 18px; background: #fff; }
 .mentor-file-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
