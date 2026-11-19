@@ -619,17 +619,7 @@ function mentorPage() {
         loading.remove();
         if (status.enabled || file) {
           mentorHistory.push({ role: "user", content: displayQuestion }, { role: "assistant", content: result.answer, route: result.route, sources: result.sources || [] });
-          const row = appendMessage({ role: "assistant", content: "", sources: result.sources });
-          const msg = row.querySelector(".mentor-message");
-          focusReplyTop(row);
-          for (const [index, ch] of Array.from(result.answer).entries()) {
-            if (!alive()) return;
-            msg.textContent += ch;
-            if (index % 8 === 0) focusReplyTop(row);
-            await new Promise(r => setTimeout(r, 14));
-          }
-          msg.innerHTML = renderMarkdown(result.answer);
-          focusReplyTop(row);
+          focusReplyTop(appendMessage({ role: "assistant", content: result.answer, sources: result.sources }));
         } else {
           mentorHistory.push({ role: "user", content: displayQuestion });
           focusReplyTop(appendMessage({ role: "assistant", content: result.sources?.length ? "找到以下相关资料：" : "目前没有找到相关资料，请换个更具体的问法。", sources: result.sources }));
