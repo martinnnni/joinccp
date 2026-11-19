@@ -66,7 +66,7 @@ test("聊天仅发送检索片段，并可连续提问", async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("知识库缺口不请求回答模型，并写入 D1 日志", async () => {
+test("业务问题未命中知识库时走 advisory，调用模型通用回答并如实记录", async () => {
   const logs = [];
   let calls = 0;
   const env = { DEEPSEEK_API_KEY: "test-key", DB: { prepare(sql) {
@@ -81,46 +81,51 @@ test("知识库缺口不请求回答模型，并写入 D1 日志", async () => {
     };
   } } };
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => {
+  globalThis.fetch = async (_url, options) => {
     calls++;
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{"intent":"business","reason":"咨询党员发展政策"}' } }] }), { status: 200 });
+    const payload = JSON.parse(options.body);
+    const content = payload.response_format ? '{"intent":"business","reason":"咨询党员发展政策"}' : "入党后保研加分以学校最新政策为准，请向辅导员核对。";
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
   };
   try {
     const response = await mentorRoutes(request("/api/mentor/chat", { question: "入党后是否有保研加分政策？" }), env, "/api/mentor/chat", student);
     const result = await response.json();
-    assert.equal(result.route, "kb_gap");
-    assert.match(result.answer, /没有这方面的确切信息/);
-    assert.equal(calls, 1);
+    assert.equal(result.route, "advisory");
+    assert.match(result.answer, /向辅导员核对/);
+    assert.equal(calls, 2);
     assert.equal(logs.length, 1);
     assert.equal(logs[0][2], "business");
-    assert.ok(logs[0][3] < 0.4);
-    assert.equal(logs[0][4], "kb_gap");
+    assert.ok(logs[0][3] < 0.32);
+    assert.equal(logs[0][4], "answered");
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("英文问题未命中知识库时按缺口处理，不调用回答模型且记录为 kb_gap", async () => {
+test("英文问题未命中知识库时走 advisory，用提问语言回答并如实记录", async () => {
   const logs = [];
   let calls = 0;
   const env = { DEEPSEEK_API_KEY: "test-key", DB: { prepare(sql) {
     let values = [];
     return {
       bind(...args) { values = args; return this; },
-      async run() { if (sql.includes("mentor_question_logs")) logs.push(values); return { meta: { changes: 1 } }; }
+      async run() { if (sql.includes("mentor_question_logs")) logs.push(values); return { meta: { changes: 1 } }; },
+      async first() { return { name: "提出入党申请" }; }
     };
   } } };
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => {
+  globalThis.fetch = async (_url, options) => {
     calls++;
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{"intent":"business","reason":"咨询党员发展政策"}' } }] }), { status: 200 });
+    const payload = JSON.parse(options.body);
+    const content = payload.response_format ? '{"intent":"business","reason":"咨询党员发展政策"}' : "Please check with your counselor for the exact policy.";
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
   };
   try {
     const response = await mentorRoutes(request("/api/mentor/chat", { question: "What extra points does joining the party give for graduate school recommendation?" }), env, "/api/mentor/chat", student);
     const result = await response.json();
-    assert.equal(result.route, "kb_gap");
-    assert.match(result.answer, /couldn't find specific information/i);
-    assert.equal(calls, 1); // 仅意图分类一次，不调用回答模型
+    assert.equal(result.route, "advisory");
+    assert.match(result.answer, /counselor/i);
+    assert.equal(calls, 2);
     assert.equal(logs.length, 1);
-    assert.equal(logs[0][4], "kb_gap");
+    assert.equal(logs[0][4], "answered");
   } finally { globalThis.fetch = originalFetch; }
 });
 

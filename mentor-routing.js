@@ -60,7 +60,7 @@ export function decideMentorRoute({ question, classification, history = [], stag
   }
   const matches = retrieveFn(question, { stageSlug, previousQuestion });
   const topSimilarity = Math.max(0, ...matches.map(item => Number(item.similarity) || 0));
-  if (topSimilarity < config.similarityThreshold) return { intent, outcome: "kb_gap", route: "kb_gap", answer: config.kbGapReply, sources: [], topSimilarity };
+  if (topSimilarity < config.similarityThreshold) return { intent, outcome: "answered", route: "advisory", matches: [], sources: [], topSimilarity };
   return { intent, outcome: "answered", route: "business", matches, sources: publicSources(matches), topSimilarity };
 }
 

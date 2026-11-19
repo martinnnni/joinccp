@@ -18,12 +18,12 @@ test("业务问题命中时保留检索依据并进入回答路由", () => {
   assert.equal(result.sources[0].file, "材料清单.md");
 });
 
-test("业务问题低于阈值时走知识库缺口，不生成事实", () => {
+test("业务问题低于阈值时走 advisory 路由，交给模型通用回答且不引用来源", () => {
   const result = decide("保研加分政策是什么？", classify("business"), { retrieveFn: () => [{ similarity: 0.12 }] });
-  assert.equal(result.route, "kb_gap");
-  assert.equal(result.outcome, "kb_gap");
-  assert.match(result.answer, /目前资料里没有这方面的确切信息/);
+  assert.equal(result.route, "advisory");
+  assert.equal(result.outcome, "answered");
   assert.deepEqual(result.sources, []);
+  assert.equal(result.topSimilarity, 0.12);
 });
 
 test("闲聊不访问检索器", () => {
@@ -74,7 +74,7 @@ test("通用写作建议直接回答，校内具体要求仍需检索依据", ()
   assert.equal(direct.route, "chitchat");
   assert.match(chitchatMessages("入党申请书怎么写", config)[0].content, /写作结构建议/);
   const official = decide("学校规定本阶段交什么材料？", classify("business"), { retrieveFn: () => [{ similarity: 0.1 }] });
-  assert.equal(official.route, "kb_gap");
+  assert.equal(official.route, "advisory");
 });
 
 test("身份及提示注入问法由服务器固定回复", () => {

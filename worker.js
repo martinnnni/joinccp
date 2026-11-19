@@ -1,4 +1,4 @@
-import { retrieve, publicSources, modelMessages, reviewStandards, knowledgeCount } from "./rag.js";
+import { retrieve, publicSources, modelMessages, advisoryMessages, reviewStandards, knowledgeCount } from "./rag.js";
 import { mentorConfig } from "./mentor-config.js";
 import { classifyIntent, decideMentorRoute, chitchatMessages, isIdentityQuestion } from "./mentor-routing.js";
 import { isPersonalQuestion, isSiteHelpQuestion, personalMatches, isSelfIdentityQuestion, isChineseQuestion } from "./mentor-personal.js";
@@ -353,11 +353,6 @@ export async function mentorRoutes(request, env, path, user) {
       ? await mentorMatches(env, user, question, previousQuestion) : null;
     const decision = decideMentorRoute({ question, classification, history, stageSlug: user?.current_stage_slug, previousQuestion, config,
       retrieveFn: matches ? () => matches : retrieve });
-    // 非中文提问检索不到中文知识库时，同样按知识库缺口处理：不调用模型、
-    // 不记为“已回答”，只给出确定性的英文提示，保持日志口径一致。
-    if (decision.route === "kb_gap" && !isChineseQuestion(question)) {
-      decision.answer = "I couldn't find specific information about this in our reference materials. Please check with your counselor, refer to the official channels of the university party committee organization department, or try asking a more specific question.";
-    }
     let answer = decision.answer || "";
     try {
       if (decision.route === "chitchat") {
@@ -366,9 +361,11 @@ export async function mentorRoutes(request, env, path, user) {
         decision.sources = publicSources(relevant);
         decision.topSimilarity = relevant.length ? Math.max(...relevant.map(item => item.similarity)) : null;
         answer = clean(await deepSeekContent(env, { model: config.classifierModel, messages: chitchatMessages(question, config, relevant), stream: false, reasoning_effort: "none", max_tokens: 850 }), 4000);
-      } else if (decision.route === "business") {
+      } else if (decision.route === "business" || decision.route === "advisory") {
         const node = user ? await env.DB.prepare("SELECT name FROM nodes WHERE slug=?").bind(user.current_node_slug).first() : null;
-        const messages = modelMessages(question, decision.matches, { stageSlug: user?.current_stage_slug, nodeName: node?.name || "", history });
+        const messages = decision.route === "advisory"
+          ? advisoryMessages(question, { stageSlug: user?.current_stage_slug, nodeName: node?.name || "", history })
+          : modelMessages(question, decision.matches, { stageSlug: user?.current_stage_slug, nodeName: node?.name || "", history });
         answer = clean(await deepSeekContent(env, { model: "deepseek-flash", messages, stream: false, reasoning_effort: "none", max_tokens: 1100, temperature: 0.2 }), 4000);
       }
     } catch {
@@ -555,7 +552,10 @@ export async function adminRoutes(request, env, path, user) {
     const invites = user.role === "admin"
       ? await env.DB.prepare("SELECT i.id,i.role,i.department_id,d.name AS department,i.expires_at,i.used_by FROM invites i LEFT JOIN departments d ON d.id=i.department_id ORDER BY i.id DESC LIMIT 100").all()
       : await env.DB.prepare("SELECT i.id,i.role,i.department_id,d.name AS department,i.expires_at,i.used_by FROM invites i LEFT JOIN departments d ON d.id=i.department_id WHERE i.department_id=? ORDER BY i.id DESC LIMIT 100").bind(user.department_id).all();
-    return json({ ok: true, students: students.results, departments: departments.results, nodes: nodes.results, materials: materials.results, invites: invites.results });
+    const counselors = user.role === "admin"
+      ? await env.DB.prepare("SELECT u.id,u.username,u.department_id,d.name AS department,u.name,u.created_at FROM users u LEFT JOIN departments d ON d.id=u.department_id WHERE u.role='counselor' ORDER BY u.id").all()
+      : await env.DB.prepare("SELECT u.id,u.username,u.department_id,d.name AS department,u.name,u.created_at FROM users u LEFT JOIN departments d ON d.id=u.department_id WHERE u.role='counselor' AND u.department_id=?").bind(user.department_id).all();
+    return json({ ok: true, students: students.results, counselors: counselors.results, departments: departments.results, nodes: nodes.results, materials: materials.results, invites: invites.results });
   }
   if (path === "/api/admin/students/bulk-advance" && request.method === "POST") {
     const ids = selectedIds((await bodyJson(request)).studentIds);
@@ -601,6 +601,101 @@ export async function adminRoutes(request, env, path, user) {
       cleanupFailed += results.filter(result => result.status === "rejected").length;
     }
     if (cleanupFailed) console.error("R2 cleanup failed after student removal", { count: cleanupFailed });
+    return json({ ok: true, count: ids.length, cleanupFailed });
+  }
+  if (path === "/api/admin/students" && request.method === "POST") {
+    requireSecret(env);
+    const data = await bodyJson(request);
+    const name = clean(data.name, 50), studentNo = clean(data.studentNo, 40);
+    assert(/^[\p{Script=Han}·]{2,20}$/u.test(name), "姓名须为 2 至 20 个汉字或间隔号");
+    assert(/^\d{6,20}$/.test(studentNo), "学号须为 6 至 20 位数字");
+    const departmentId = user.role === "admin" ? id(data.departmentId) : user.department_id;
+    assert(departmentId, "院系无效");
+    if (user.role === "admin") assert(await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(departmentId).first(), "院系不存在", 404);
+    const existing = await env.DB.prepare("SELECT id FROM users WHERE username=? COLLATE NOCASE").bind(studentNo).first();
+    assert(!existing, "该学号已注册", 409);
+    const salt = randomHex(16);
+    const initial = await hmac(env.AUTH_PEPPER, "initial:" + studentNo.toLowerCase() + ":cauc+" + studentNo);
+    try {
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name,must_change_password) VALUES(?,?,?,'student',?,?,1)").bind(studentNo, salt, initial, departmentId, name),
+        env.DB.prepare("INSERT INTO profiles(user_id,name,student_no,major,grade,phone,applied_at,node_entered_at) SELECT id,?,?, '', '', '', NULL, ? FROM users WHERE username=?").bind(name, studentNo, iso().slice(0, 10), studentNo)
+      ]);
+    } catch (error) {
+      if (String(error).includes("UNIQUE")) throw new HttpError(409, "该学号已注册");
+      throw error;
+    }
+    return json({ ok: true, name, studentNo }, 201);
+  }
+  if (path === "/api/admin/counselors" && request.method === "POST") {
+    requireSecret(env);
+    assert(user.role === "admin", "仅管理员可添加辅导员", 403);
+    const data = await bodyJson(request);
+    const name = clean(data.name, 50), username = clean(data.username, 40);
+    assert(/^[\p{Script=Han}·]{2,20}$/u.test(name), "姓名须为 2 至 20 个汉字或间隔号");
+    assert(validName(username), "用户名只能包含字母、数字、点、横线或下划线，长度为 3 至 40 位");
+    const departmentId = id(data.departmentId);
+    assert(await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(departmentId).first(), "院系不存在", 404);
+    const existing = await env.DB.prepare("SELECT id FROM users WHERE username=? COLLATE NOCASE").bind(username).first();
+    assert(!existing, "该用户名已存在", 409);
+    const salt = randomHex(16);
+    const initial = await hmac(env.AUTH_PEPPER, "initial:" + username.toLowerCase() + ":cauc+" + username);
+    await env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name,must_change_password) VALUES(?,?,?,'counselor',?,?,1)").bind(username, salt, initial, departmentId, name).run();
+    return json({ ok: true, name, username }, 201);
+  }
+  if (path === "/api/admin/counselors/auto-register" && request.method === "POST") {
+    requireSecret(env);
+    assert(user.role === "admin", "仅管理员可批量添加辅导员", 403);
+    const data = await bodyJson(request);
+    const departmentId = id(data.departmentId);
+    assert(await env.DB.prepare("SELECT id FROM departments WHERE id=?").bind(departmentId).first(), "院系不存在", 404);
+    assert(Array.isArray(data.counselors) && data.counselors.length >= 1 && data.counselors.length <= 50, "每次可添加 1 至 50 名辅导员");
+    const counselors = data.counselors.map(item => ({ name: clean(item?.name, 50), username: clean(item?.username, 40) }));
+    for (const counselor of counselors) {
+      assert(/^[\p{Script=Han}·]{2,20}$/u.test(counselor.name), "姓名须为 2 至 20 个汉字或间隔号");
+      assert(validName(counselor.username), "用户名只能包含字母、数字、点、横线或下划线，长度为 3 至 40 位");
+    }
+    const usernames = counselors.map(c => c.username);
+    assert(new Set(usernames).size === usernames.length, "名单中有重复用户名");
+    const marks = usernames.map(() => "?").join(",");
+    const existing = await env.DB.prepare("SELECT username FROM users WHERE username IN (" + marks + ")").bind(...usernames).all();
+    assert(existing.results.length === 0, "已有用户名注册，请移除重复项后重试：" + existing.results.map(row => row.username).join("、"), 409);
+    const statements = [];
+    for (const counselor of counselors) {
+      const salt = randomHex(16);
+      const initial = await hmac(env.AUTH_PEPPER, "initial:" + counselor.username.toLowerCase() + ":cauc+" + counselor.username);
+      statements.push(env.DB.prepare("INSERT INTO users(username,password_salt,password_verifier,role,department_id,name,must_change_password) VALUES(?,?,?,'counselor',?,?,1)").bind(counselor.username, salt, initial, departmentId, counselor.name));
+    }
+    try { await env.DB.batch(statements); }
+    catch (error) {
+      if (String(error).includes("UNIQUE")) throw new HttpError(409, "部分用户名已注册，请刷新名单后重试");
+      throw error;
+    }
+    return json({ ok: true, count: counselors.length }, 201);
+  }
+  if (path === "/api/admin/counselors/bulk-delete" && request.method === "POST") {
+    assert(user.role === "admin", "仅管理员可删除辅导员", 403);
+    const data = await bodyJson(request);
+    const usernames = Array.isArray(data.usernames) ? data.usernames.map(value => clean(value, 40)).filter(Boolean) : [];
+    assert(usernames.length >= 1 && usernames.length <= 50, "请输入 1 至 50 个用户名");
+    const marks = usernames.map(() => "?").join(",");
+    const rows = await env.DB.prepare("SELECT id,username FROM users WHERE role='counselor' AND username IN (" + marks + ")").bind(...usernames).all();
+    assert(rows.results.length === usernames.length, "部分辅导员用户名不存在", 404);
+    const ids = rows.results.map(row => row.id);
+    const idMarks = ids.map(() => "?").join(",");
+    const keys = await env.DB.prepare("SELECT r2_key FROM form_templates WHERE uploaded_by IN (" + idMarks + ")").bind(...ids).all();
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM form_templates WHERE uploaded_by IN (" + idMarks + ")").bind(...ids),
+      env.DB.prepare("DELETE FROM invites WHERE used_by IN (" + idMarks + ")").bind(...ids),
+      env.DB.prepare("DELETE FROM mentor_question_logs WHERE user_id IN (" + idMarks + ")").bind(...ids),
+      env.DB.prepare("DELETE FROM users WHERE role='counselor' AND id IN (" + idMarks + ")").bind(...ids)
+    ]);
+    let cleanupFailed = 0;
+    for (let offset = 0; offset < keys.results.length; offset += 20) {
+      const results = await Promise.allSettled(keys.results.slice(offset, offset + 20).map(row => env.FILES.delete(row.r2_key)));
+      cleanupFailed += results.filter(result => result.status === "rejected").length;
+    }
+    if (cleanupFailed) console.error("R2 cleanup failed after counselor removal", { count: cleanupFailed });
     return json({ ok: true, count: ids.length, cleanupFailed });
   }
   if (path === "/api/admin/checks/bulk-review" && request.method === "POST") {

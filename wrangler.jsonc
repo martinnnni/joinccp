@@ -6,7 +6,7 @@
   "workers_dev": true,
   "preview_urls": false,
   "vars": {
-    "RAG_MIN_SIMILARITY": "0.40",
+    "RAG_MIN_SIMILARITY": "0.32",
     "INTENT_MODEL": "deepseek-flash"
   },
   "assets": {

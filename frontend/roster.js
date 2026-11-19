@@ -3,6 +3,28 @@ import { extractReviewText } from "./file-text.js";
 
 const namePattern = /^[\p{Script=Han}·]{2,20}$/u;
 const numberPattern = /^\d{6,20}$/;
+const usernamePattern = /^[a-zA-Z0-9_.-]{3,40}$/;
+
+// 解析辅导员名单：“姓名 用户名”或每行一个“用户名”。用户名用于登录，姓名可为空（删除场景）。
+export function parseCounselorRoster(text) {
+  const lines = String(text || "").replace(/\r/g, "\n").split(/\n+/).map(line => line.trim()).filter(Boolean);
+  const rows = [], seen = new Set(), issues = [];
+  for (let index = 0; index < lines.length; index++) {
+    const parts = lines[index].replace(/["“”]/g, "").split(/[\t,，;；|\s]+/).map(part => part.trim()).filter(Boolean);
+    let name = "", username = "";
+    if (parts.length >= 2) {
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (namePattern.test(parts[i]) && usernamePattern.test(parts[i + 1])) { name = parts[i]; username = parts[i + 1]; break; }
+        if (usernamePattern.test(parts[i]) && namePattern.test(parts[i + 1])) { name = parts[i + 1]; username = parts[i]; break; }
+      }
+    }
+    if (!username && parts.length === 1 && usernamePattern.test(parts[0])) username = parts[0];
+    if (!username) { issues.push("第 " + (index + 1) + " 行未能识别姓名与用户名：" + lines[index].slice(0, 60)); continue; }
+    if (seen.has(username.toLowerCase())) issues.push("重复用户名 " + username + "（第 " + (index + 1) + " 行）");
+    else { seen.add(username.toLowerCase()); rows.push({ name, username }); }
+  }
+  return { rows, issues };
+}
 
 export function parseRosterText(text) {
   const lines = String(text || "").replace(/\r/g, "\n").split(/\n+/).map(line => line.trim()).filter(Boolean);

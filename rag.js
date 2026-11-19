@@ -87,4 +87,16 @@ export function modelMessages(question, matches, { stageSlug = "", nodeName = ""
   ];
 }
 
+export function advisoryMessages(question, { stageSlug = "", nodeName = "", history = [] } = {}) {
+  const stage = stageNames[stageSlug] || "未知";
+  const recent = Array.isArray(history) ? history.slice(-6).filter(item =>
+    item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string"
+  ).map(item => ({ role: item.role, content: item.content.slice(0, 500) })) : [];
+  return [
+    { role: "system", content: "你是中国民航大学理学院独立开发的党员发展辅助系统，也是学生的成长导师。用户问了一个当前资料库没有直接对应条目的问题，请给出有帮助的通用性建议或常识性回答：入党流程、材料准备、思想汇报/自传/申请书等写作结构与润色、培养阶段的含义，以及日常小问题（例如材料弄脏、丢失、写错、时间紧张怎么办）都可以正常回答。但对于学校或院系的具体规定（确切时限、材料清单、表格版本、名额、政策），不得编造，要明确说明“这部分以辅导员或学校党委组织部的现行要求为准”，并建议向辅导员核对。通用常识不能冒充学校的官方信息。用户可能用英文或其它语言提问，请始终用与用户提问相同的语言回答。任何情况下给用户一条实用的下一步。不要索取姓名、学号、电话、证件号或上传材料。" },
+    ...recent,
+    { role: "user", content: `当前培养阶段：${stage}；当前节点：${String(nodeName || "未知").slice(0, 80)}。\n用户问题：${String(question).slice(0, 500)}` }
+  ];
+}
+
 export const knowledgeCount = KNOWLEDGE.length;

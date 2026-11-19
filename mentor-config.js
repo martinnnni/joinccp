@@ -1,11 +1,10 @@
 const defaults = {
-  similarityThreshold: 0.4,
+  similarityThreshold: 0.32,
   classifierModel: "deepseek-flash",
   identityReply: "我是中国民航大学理学院独立开发的党员发展辅助系统",
   identityExit: "你也可以问我党员发展流程和材料。",
   chitchatExit: "你也可以问我党员发展流程和材料。",
   businessExit: "如需确认，请向辅导员或学校官方渠道核对。",
-  kbGapReply: "目前资料里没有这方面的确切信息。你可以向辅导员核对、查看学校党委组织部的官方渠道，或换个更具体的问法。",
   outOfScopeReply: "我主要协助查询党员发展流程、材料与填写要求。如果你想问这方面的问题，可以告诉我具体阶段；其他问题请使用相应的官方渠道。",
   clarificationReply: "你是想了解党员发展流程、材料填写，还是培养阶段的问题？能补充一下具体场景吗？",
   uncertainExitReply: "我暂时不能确定你要查询的具体事项。你可以换个更明确的问法，或向辅导员咨询。",
