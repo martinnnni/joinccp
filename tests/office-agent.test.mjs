@@ -30,6 +30,7 @@ test("辅导员不能通过对话为其他辅导员生成删除计划", async ()
   } }] }));
   let writes = 0;
   const env = { DEEPSEEK_API_KEY: "test", DB: { prepare() { return {
+    bind() { return this; },
     async all() { return { results: [] }; },
     async run() { writes++; }
   }; } } };

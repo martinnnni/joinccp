@@ -329,7 +329,7 @@ function mentorPage() {
       make("h1", { text: staffAgent ? "今天想处理什么？" : "今天想了解什么？" }),
       make("p", { text: staffAgent ? "告诉我任务，或上传名单与文件。我会整理执行清单，待你确认后处理。" : "从培养流程到写作思路，直接说出你的问题。" }));
     const prompts = make("div", { className: "mentor-prompts" },
-      (staffAgent ? ["批量登记学生", "批量更新学生档案", "上传培养表格", "为学生重置密码", ...(me.role === "admin" ? ["批量添加辅导员", "批量删除辅导员"] : [])] : ["我现在处于哪个入党阶段？", "我交了哪些材料，还有哪些没交？", "这个系统怎么使用？", "入党申请书如何组织结构？"])
+      (staffAgent ? ["批量登记学生", "发送站内信", "批量推进培养阶段", "查询学生名单"] : ["我现在处于哪个入党阶段？", "我交了哪些材料，还有哪些没交？", "这个系统怎么使用？", "入党申请书如何组织结构？"])
         .map(question => button(question, () => { textarea.value = question; form.requestSubmit(); }, "mentor-prompt")));
     empty.append(prompts);
     const sourceView = sources => make("details", { className: "mentor-sources" },
@@ -458,7 +458,7 @@ function mentorPage() {
         let documentText = "";
         const task = [...officeHistory.filter(item => item.role === "user").slice(-2).map(item => item.content), question].join("\n");
         if (files.length && !/归档|资料下载|上传.*表格/.test(question) &&
-          (/名单|登记|注册|添加辅导员|删除辅导员|更新|修改|导入/.test(task) ||
+          (/名单|登记|注册|添加辅导员|删除|群发|收件人|站内信|推进|审阅|更新|修改|导入/.test(task) ||
           files.every(file => /\.(xlsx|csv|txt)$/i.test(file.name)) && !/上传|归档|资料下载/.test(task))) {
           for (const file of files) {
             if (/\.(xlsx|csv|txt|docx|pdf)$/i.test(file.name)) documentText += "\n文件：" + file.name + "\n" + (await extractRosterText(file)).slice(0, 10000);
@@ -472,7 +472,9 @@ function mentorPage() {
         if (result.plan) {
           pendingOfficePlan = result.plan.id;
           const plannedFiles = files.slice();
-          const confirm = button("确认执行", async () => {
+          const label = ["delete_students", "delete_counselors"].includes(result.plan.type) ? "确认删除" :
+            result.plan.type === "send_notifications" ? "确认发送" : "确认执行";
+          const confirm = button(label, async () => {
             if (pendingOfficePlan !== result.plan.id || confirm.disabled) return;
             confirm.disabled = true;
             const progress = appendMessage({ role: "assistant", content: "正在执行已确认的任务…" });
