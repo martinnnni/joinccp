@@ -125,7 +125,7 @@ test("我是谁：未登录答不知道，登录后答 SQL 档案，英文提问
         return null;
       },
       async run() { return { meta: { changes: 1 } }; } };
-  } } };
+  }, async batch() { return []; } } };
   const guest = await (await mentorRoutes(request("/api/mentor/chat", { question: "我是谁" }), env, "/api/mentor/chat", null)).json();
   assert.match(guest.answer, /不知道/);
   const guestEn = await (await mentorRoutes(request("/api/mentor/chat", { question: "who am i" }), env, "/api/mentor/chat", null)).json();

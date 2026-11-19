@@ -2,12 +2,14 @@ import JSZip from "jszip";
 import officialForms from "../official-forms.json";
 import { extractReviewText } from "./file-text.js";
 import { extractRosterText, parseRosterText } from "./roster.js";
+import { deriveVerifier } from "./pbkdf2.js";
 
 const root = document.getElementById("app");
 const navigation = document.getElementById("navigation");
 let me = null;
 let config = null;
 let mentorHistory = [];
+let mentorEpoch = 0;
 const make = (tag, props = {}, ...children) => {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
@@ -115,10 +117,7 @@ function randomHex(size) {
   return Array.from(crypto.getRandomValues(new Uint8Array(size)), n => n.toString(16).padStart(2, "0")).join("");
 }
 async function derive(password, salt, iterations = 210000) {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bytes = new Uint8Array(salt.match(/.{2}/g).map(x => parseInt(x, 16)));
-  const result = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: bytes, iterations, hash: "SHA-256" }, key, 256);
-  return Array.from(new Uint8Array(result), n => n.toString(16).padStart(2, "0")).join("");
+  return deriveVerifier(password, salt, iterations);
 }
 function navigate(page) { location.hash = page; render(); }
 function nav() {
@@ -309,6 +308,8 @@ function mentorGirl() {
 function mentorPage() {
   const shell = make("div", { className: "mentor-app" }, notice("正在打开成长导师…"));
   (async () => { try {
+    const epoch = mentorEpoch;
+    const alive = () => epoch === mentorEpoch;
     const status = await api("/api/mentor");
     const icon = (path, label) => { const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("width", "20"); svg.setAttribute("height", "20"); svg.setAttribute("fill", "none"); svg.setAttribute("stroke", "currentColor"); svg.setAttribute("stroke-width", "1.8"); svg.setAttribute("stroke-linecap", "round"); svg.setAttribute("stroke-linejoin", "round"); svg.setAttribute("aria-hidden", "true"); const p = document.createElementNS("http://www.w3.org/2000/svg", "path"); p.setAttribute("d", path); svg.append(p); return svg; };
     const links = me?.role === "counselor" || me?.role === "admin"
@@ -498,6 +499,7 @@ function mentorPage() {
       playGirlTyping(); scrollEnd();
       try {
         const text = file ? await extractRosterText(file) : question;
+        if (!alive()) return;
         const result = parseRosterText(text);
         loading.remove();
         if (!result.rows.length) focusReplyTop(appendMessage({ role: "assistant", content: "暂时没识别到有效的姓名和学号。请上传名单，或按“张三 123456789”每行一人粘贴后发送。" }));
@@ -531,6 +533,7 @@ function mentorPage() {
           result = await post("/api/mentor/review", { filename: file.name, text });
           clearFile();
         } else result = await post(status.enabled ? "/api/mentor/chat" : "/api/mentor/retrieve", { question, history });
+        if (!alive()) return;
         loading.remove();
         if (status.enabled || file) {
           mentorHistory.push({ role: "user", content: displayQuestion }, { role: "assistant", content: result.answer, route: result.route, sources: result.sources || [] });
@@ -538,6 +541,7 @@ function mentorPage() {
           const msg = row.querySelector(".mentor-message");
           focusReplyTop(row);
           for (const [index, ch] of Array.from(result.answer).entries()) {
+            if (!alive()) return;
             msg.textContent += ch;
             if (index % 8 === 0) focusReplyTop(row);
             await new Promise(r => setTimeout(r, 14));
@@ -575,6 +579,7 @@ function closeMentor() {
 }
 function resetMentorPanel() {
   closeMentor();
+  mentorEpoch++;
   mentorHistory = [];
   const body = document.getElementById("mentorPanelBody");
   if (body) { body.replaceChildren(); delete body.dataset.built; }

@@ -44,6 +44,7 @@ function validName(value) { return /^[a-zA-Z0-9_.-]{3,40}$/.test(value); }
 function validHex(value, length) { return new RegExp("^[a-f0-9]{" + length + "}$").test(value); }
 function sessionCookie(request) { return /(?:^|; )session=([a-f0-9]{64})(?:;|$)/.exec(request.headers.get("cookie") || "")?.[1] || ""; }
 const GUEST_DAILY_LIMIT = 20;
+const GUEST_IP_DAILY_LIMIT = 60;
 const beijingDay = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
 function deviceCookie(request) { return /(?:^|; )device=([a-f0-9]{32})(?:;|$)/.exec(request.headers.get("cookie") || "")?.[1] || ""; }
 async function currentUser(request, env) {
@@ -286,13 +287,24 @@ export async function mentorRoutes(request, env, path, user) {
     const data = await bodyJson(request), question = clean(data.question, 500);
     assert(question.length >= 2, "请输入至少两个字的问题");
     if (!user) {
-      let key = deviceCookie(request);
-      if (!key) key = await sha256("ip:" + (request.headers.get("CF-Connecting-IP") || "local"));
+      const ip = clean(request.headers.get("CF-Connecting-IP") || "local", 80);
+      let device = deviceCookie(request);
+      if (!device) device = await sha256("ip:" + ip);
+      // 设备 Cookie 可被用户清除后重新获得，因此额外按来源 IP 封顶，
+      // 避免清 Cookie 即重置额度、持续消耗 DeepSeek 额度。
+      const ipKey = "ip:" + await sha256("ip:" + ip);
       const today = beijingDay();
-      const row = await env.DB.prepare("SELECT count, day FROM guest_usage WHERE device_key=?").bind(key).first();
-      const used = row && row.day === today ? row.count : 0;
-      if (used >= GUEST_DAILY_LIMIT) return json({ ok: false, error: "您已超出限额，请登录后继续使用", limitExceeded: true }, 429);
-      await env.DB.prepare("INSERT INTO guest_usage(device_key,day,count) VALUES(?,?,1) ON CONFLICT(device_key) DO UPDATE SET day=excluded.day, count=CASE WHEN guest_usage.day=excluded.day THEN guest_usage.count+1 ELSE 1 END").bind(key, today).run();
+      const [deviceRow, ipRow] = await Promise.all([
+        env.DB.prepare("SELECT count, day FROM guest_usage WHERE device_key=?").bind(device).first(),
+        env.DB.prepare("SELECT count, day FROM guest_usage WHERE device_key=?").bind(ipKey).first()
+      ]);
+      const deviceUsed = deviceRow && deviceRow.day === today ? deviceRow.count : 0;
+      const ipUsed = ipRow && ipRow.day === today ? ipRow.count : 0;
+      if (deviceUsed >= GUEST_DAILY_LIMIT || ipUsed >= GUEST_IP_DAILY_LIMIT) return json({ ok: false, error: "您已超出限额，请登录后继续使用", limitExceeded: true }, 429);
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO guest_usage(device_key,day,count) VALUES(?,?,1) ON CONFLICT(device_key) DO UPDATE SET day=excluded.day, count=CASE WHEN guest_usage.day=excluded.day THEN guest_usage.count+1 ELSE 1 END").bind(device, today),
+        env.DB.prepare("INSERT INTO guest_usage(device_key,day,count) VALUES(?,?,1) ON CONFLICT(device_key) DO UPDATE SET day=excluded.day, count=CASE WHEN guest_usage.day=excluded.day THEN guest_usage.count+1 ELSE 1 END").bind(ipKey, today)
+      ]);
     }
     const history = Array.isArray(data.history) ? data.history.slice(-6) : [];
     const previousQuestion = history.filter(item => item?.role === "user").at(-1)?.content || "";
@@ -341,13 +353,10 @@ export async function mentorRoutes(request, env, path, user) {
       ? await mentorMatches(env, user, question, previousQuestion) : null;
     const decision = decideMentorRoute({ question, classification, history, stageSlug: user?.current_stage_slug, previousQuestion, config,
       retrieveFn: matches ? () => matches : retrieve });
-    // 非中文提问检索不到中文知识库时，不硬停，交给模型用提问语言回答
+    // 非中文提问检索不到中文知识库时，同样按知识库缺口处理：不调用模型、
+    // 不记为“已回答”，只给出确定性的英文提示，保持日志口径一致。
     if (decision.route === "kb_gap" && !isChineseQuestion(question)) {
-      decision.route = "business";
-      decision.matches = matches || [];
-      decision.outcome = "answered";
-      decision.answer = "";
-      decision.sources = publicSources(matches || []);
+      decision.answer = "I couldn't find specific information about this in our reference materials. Please check with your counselor, refer to the official channels of the university party committee organization department, or try asking a more specific question.";
     }
     let answer = decision.answer || "";
     try {

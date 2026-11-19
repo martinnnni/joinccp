@@ -98,6 +98,32 @@ test("知识库缺口不请求回答模型，并写入 D1 日志", async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("英文问题未命中知识库时按缺口处理，不调用回答模型且记录为 kb_gap", async () => {
+  const logs = [];
+  let calls = 0;
+  const env = { DEEPSEEK_API_KEY: "test-key", DB: { prepare(sql) {
+    let values = [];
+    return {
+      bind(...args) { values = args; return this; },
+      async run() { if (sql.includes("mentor_question_logs")) logs.push(values); return { meta: { changes: 1 } }; }
+    };
+  } } };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"intent":"business","reason":"咨询党员发展政策"}' } }] }), { status: 200 });
+  };
+  try {
+    const response = await mentorRoutes(request("/api/mentor/chat", { question: "What extra points does joining the party give for graduate school recommendation?" }), env, "/api/mentor/chat", student);
+    const result = await response.json();
+    assert.equal(result.route, "kb_gap");
+    assert.match(result.answer, /couldn't find specific information/i);
+    assert.equal(calls, 1); // 仅意图分类一次，不调用回答模型
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0][4], "kb_gap");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("身份问法固定回复，不调用外部模型", async () => {
   const logs = [];
   const env = { DEEPSEEK_API_KEY: "test-key", DB: { prepare(sql) {
