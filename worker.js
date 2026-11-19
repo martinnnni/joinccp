@@ -923,6 +923,7 @@ export async function officeRoutes(request, env, path, user) {
     const history = Array.isArray(data.history) ? data.history.slice(-6) : [];
     assert(question || documentText || files.length, "请描述任务或上传文件");
     if (isIdentityQuestion(question)) return json({ ok: true, answer: "我是中国民航大学理学院独立开发的党员发展辅助系统。作为办公助理，我可以帮你整理和执行已确认的站内任务。", plan: null });
+    if (isCurrentTimeQuestion(question)) return json({ ok: true, answer: getCurrentTime(), plan: null });
     assert(env.DEEPSEEK_API_KEY, "办公助理尚未配置 AI 服务", 503);
     assert(files.length <= 10, "一次最多上传 10 个文件");
     const catalog = {
@@ -930,7 +931,8 @@ export async function officeRoutes(request, env, path, user) {
       materials: (await env.DB.prepare("SELECT name,stage_slug FROM materials ORDER BY id").all()).results,
       departments: user.role === "admin" ? (await env.DB.prepare("SELECT id,name FROM departments ORDER BY name").all()).results : []
     };
-    const raw = await deepSeekContent(env, { model: "deepseek-flash", messages: officeMessages(question, documentText, files, user.role, catalog, history), response_format: { type: "json_object" }, reasoning_effort: "none", stream: false, max_tokens: 2800, temperature: 0.1 });
+    const references = retrieve(question).filter(item => item.similarity >= mentorConfig(env).similarityThreshold).slice(0, 3);
+    const raw = await deepSeekContent(env, { model: "deepseek-flash", messages: officeMessages(question, documentText, files, user.role, catalog, history, references), response_format: { type: "json_object" }, reasoning_effort: "none", stream: false, max_tokens: 2800, temperature: 0.1 });
     let parsed;
     try { parsed = parseOfficePlan(raw); } catch (error) { return json({ ok: true, answer: error.message + "。请补充具体信息。", plan: null }); }
     if (!parsed.action) return json({ ok: true, answer: parsed.reply, plan: null });

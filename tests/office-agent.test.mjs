@@ -34,6 +34,13 @@ test("办公助理被问模型身份时固定回答，不调用外部模型", as
   assert.equal(data.plan, null);
 });
 
+test("办公助理的当前时间来自服务器时钟", async () => {
+  const response = await officeRoutes(request("/api/office/plan", { question: "现在几点？" }), {}, "/api/office/plan", counselor);
+  const data = await response.json();
+  assert.match(data.answer, /现在北京时间是/);
+  assert.equal(data.plan, null);
+});
+
 test("办公助理仅生成待确认计划，不在规划阶段重置密码", async () => {
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"reply":"请核对目标学生","action":{"type":"reset_password","student":"123456789"}}' } }] }), { status: 200 });
