@@ -24,10 +24,22 @@ function equal(a, b) {
   return difference === 0;
 }
 class HttpError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, code = null) { super(message); this.status = status; this.code = code; }
 }
 function assert(condition, message, status = 400) {
   if (!condition) throw new HttpError(status, message);
+}
+const MENTOR_CODES = {
+  "M-100": "成长导师尚未启用（未配置 AI API Key）",
+  "M-101": "AI API Key 无效或已失效",
+  "M-102": "AI 额度或余额不足（token 不足）",
+  "M-103": "请求过于频繁，已触发限流",
+  "M-104": "AI 服务响应超时",
+  "M-105": "AI 服务暂时不可用",
+  "M-106": "AI 返回内容无效",
+};
+function mentorFailure(code, status = 503) {
+  return new HttpError(status, MENTOR_CODES[code] || "AI 服务异常", code);
 }
 function id(value) {
   const number = Number(value);
@@ -230,14 +242,25 @@ async function deepSeekContent(env, payload) {
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(30000)
     });
-  } catch { throw new HttpError(503, "AI 服务暂时无法连接"); }
+  } catch (error) {
+    if (error?.name === "TimeoutError" || error?.name === "AbortError") throw mentorFailure("M-104");
+    throw mentorFailure("M-105");
+  }
   if (!response.ok) {
-    console.error("DeepSeek request failed", response.status);
-    throw new HttpError(503, "AI 服务暂不可用");
+    let bodyError = "";
+    try { bodyError = String((await response.json())?.error?.message || "").toLowerCase(); } catch {}
+    const status = response.status;
+    const code = status === 401 || status === 403 ? "M-101"
+      : status === 402 ? "M-102"
+        : status === 429 ? (/insufficient|quota|balance|exceed/.test(bodyError) ? "M-102" : "M-103")
+          : status === 400 && /context|token|length|too long/i.test(bodyError) ? "M-102"
+            : "M-105";
+    console.error("DeepSeek request failed", status, bodyError);
+    throw mentorFailure(code);
   }
   const data = await response.json().catch(() => ({}));
   const content = data.choices?.[0]?.message?.content;
-  assert(typeof content === "string" && content.trim(), "AI 未返回有效内容", 503);
+  if (typeof content !== "string" || !content.trim()) throw mentorFailure("M-106");
   return content.trim();
 }
 async function logMentorQuestion(env, user, question, decision) {
@@ -264,7 +287,7 @@ export async function mentorRoutes(request, env, path, user) {
   if (path === "/api/mentor/review" && request.method === "POST") {
     assert(user, "请先登录", 401);
     assert(user.role === "student", "仅学生可使用文件检查", 403);
-    assert(enabled, "成长导师尚未启用，请先配置 DeepSeek API Key", 503);
+    if (!enabled) throw mentorFailure("M-100");
     const data = await bodyJson(request);
     const filename = clean(data.filename, 150);
     const content = String(data.text ?? "").replace(/\0/g, "").trim();
@@ -279,7 +302,7 @@ export async function mentorRoutes(request, env, path, user) {
       response_format: { type: "json_object" }, reasoning_effort: "none", stream: false, max_tokens: 2300, temperature: 0.1 });
     let report;
     try { report = parseReview(response, content, standards.length); }
-    catch { throw new HttpError(503, "AI 检查结果暂不可用，请重试"); }
+    catch { throw mentorFailure("M-106"); }
     await logMentorQuestion(env, user, "文件检查：" + filename, { intent: "business", topSimilarity: 1, outcome: "answered" });
     return json({ ok: true, answer: formatReview(filename, form, report), sources: publicSources(standards), route: "document_review", form: form?.name || null });
   }
@@ -340,7 +363,7 @@ export async function mentorRoutes(request, env, path, user) {
       }
       return json({ ok: true, answer, sources: [], route: "identity", intent: "business" });
     }
-    assert(enabled, "成长导师尚未启用，请先配置 DeepSeek API Key", 503);
+    if (!enabled) throw mentorFailure("M-100");
     const config = mentorConfig(env);
     const classification = isIdentityQuestion(question)
       ? { intent: "chitchat", reason: "身份问题" }
@@ -372,7 +395,13 @@ export async function mentorRoutes(request, env, path, user) {
           : modelMessages(question, decision.matches, { stageSlug: user?.current_stage_slug, nodeName: node?.name || "", history });
         answer = clean(await deepSeekContent(env, { model: "deepseek-flash", messages, stream: false, reasoning_effort: "none", max_tokens: 1100, temperature: 0.2 }), 4000);
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof HttpError && typeof error.code === "string" && /^M-/.test(error.code)) {
+        decision.outcome = "refused";
+        decision.sources = [];
+        await logMentorQuestion(env, user, question, decision);
+        throw error;
+      }
       answer = config.serviceFailureReply;
       decision.outcome = "refused";
       decision.sources = [];
@@ -828,7 +857,7 @@ export default {
         || await adminRoutes(request, env, path, user);
       return secured(response || json({ ok: false, error: "接口不存在" }, 404));
     } catch (error) {
-      if (error instanceof HttpError) return secured(json({ ok: false, error: error.message }, error.status));
+      if (error instanceof HttpError) return secured(json({ ok: false, error: error.message, ...(error.code ? { code: error.code } : {}) }, error.status));
       console.error("request error", error);
       return secured(json({ ok: false, error: "服务器暂不可用" }, 500));
     }

@@ -158,6 +158,24 @@ test("党员领域实操问题被误判为无关时仍先检索并自主回答",
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("AI 故障抛出带错误代码的异常，供用户报告给导员", async () => {
+  const env = { DEEPSEEK_API_KEY: "test-key", DB: { prepare(sql) {
+    return {
+      bind() { return this; },
+      async run() { return { meta: { changes: 1 } }; },
+      async first() { return { name: "提出入党申请" }; }
+    };
+  } } };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: { message: "Insufficient Balance" } }), { status: 402 });
+  try {
+    await assert.rejects(
+      mentorRoutes(request("/api/mentor/chat", { question: "入党申请书怎么写？" }), env, "/api/mentor/chat", student),
+      error => error && error.code === "M-102" && /额度或余额不足/.test(error.message)
+    );
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("身份问法固定回复，不调用外部模型", async () => {
   const logs = [];
   const env = { DEEPSEEK_API_KEY: "test-key", DB: { prepare(sql) {

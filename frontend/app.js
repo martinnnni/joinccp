@@ -25,6 +25,7 @@ const make = (tag, props = {}, ...children) => {
   return node;
 };
 const mentorTitle = () => (me && (me.role === "counselor" || me.role === "admin")) ? "办公助理" : "成长导师";
+const mentorErrorText = (code, message) => "错误代码 " + code + "：" + message + "。请将错误代码报告给你的导员和支持部门。";
 const renderMarkdown = src => {
   const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const inline = s => {
@@ -103,7 +104,11 @@ async function api(path, options = {}) {
     ...options
   });
   const data = await response.json();
-  if (!response.ok || !data.ok) throw new Error(data.error || "请求失败");
+  if (!response.ok || !data.ok) {
+    const error = new Error(data.error || "请求失败");
+    if (data.code) error.code = data.code;
+    throw error;
+  }
   return data;
 }
 const post = (path, data) => api(path, { method: "POST", body: JSON.stringify(data) });
@@ -629,7 +634,7 @@ function mentorPage() {
           mentorHistory.push({ role: "user", content: displayQuestion });
           focusReplyTop(appendMessage({ role: "assistant", content: result.sources?.length ? "找到以下相关资料：" : "目前没有找到相关资料，请换个更具体的问法。", sources: result.sources }));
         }
-      } catch (error) { loading.remove(); focusReplyTop(appendMessage({ role: "assistant", content: error.message + "。请稍后重试。" })); }
+      } catch (error) { loading.remove(); focusReplyTop(appendMessage({ role: "assistant", content: error.code && /^M-/.test(error.code) ? mentorErrorText(error.code, error.message) : error.message + "。请稍后重试。" })); }
       finally { playGirlBack(); release(); attach.disabled = false; }
     });
   } catch (error) { shell.replaceChildren(notice(error.message, "error")); } })();

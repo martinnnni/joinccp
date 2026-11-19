@@ -43,7 +43,8 @@ export async function classifyIntent(question, history, callModel, config) {
     const parsed = JSON.parse(content);
     if (!parsed || !intents.has(parsed.intent) || typeof parsed.reason !== "string") throw new Error("分类格式无效");
     return { intent: parsed.intent, reason: parsed.reason.slice(0, 120) };
-  } catch {
+  } catch (error) {
+    if (error && typeof error.code === "string" && /^M-/.test(error.code)) throw error;
     return { intent: "uncertain", reason: "分类服务不可用或输出无效" };
   }
 }
