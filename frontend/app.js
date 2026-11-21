@@ -4,7 +4,7 @@ import { extractReviewText } from "./file-text.js";
 import { extractRosterText } from "./roster.js";
 import { deriveVerifier } from "./pbkdf2.js";
 import { fileExtension, materialAccept, maxBatchBytes, maxFileBytes, normalizedAttachment, officeAccept, uploadType } from "../upload-types.js";
-import { decodeImage, processImage } from "./scan.js";
+import { decodeImage, processImage, rotateScan, validCrop } from "./scan.js";
 
 const root = document.getElementById("app");
 const navigation = document.getElementById("navigation");
@@ -36,7 +36,8 @@ const renderMarkdown = src => {
     s = s.replace(/\*\*\*([^*]+)\*\*\*/g, "<strong><em>$1</em></strong>");
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) =>
+      '<a href="' + url.replace(/"/g, "&quot;") + '" target="_blank" rel="noopener noreferrer">' + label + '</a>');
     return s;
   };
   const lines = String(src ?? "").split("\n");
@@ -143,7 +144,7 @@ function nav() {
   if (me) navigation.append(make("span", { className: "nav-label", text: me.role === "student" ? "学生工作区" : "党务工作区" }));
   const active = location.hash.slice(1) || (me ? me.role === "student" ? "profile" : "admin" : "login");
   const items = me?.must_change_password ? [["password", "设置新密码"]] : me ? (me.role === "student"
-    ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ["mentor", "成长导师"], ["notifications", "通知"]]
+    ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ...(me.is_monitor ? [["checks", "班级材料"]] : []), ["mentor", "成长导师"], ["notifications", "通知"]]
     : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"]])
     : (config?.initialized ? [] : [["bootstrap", "初始化"]]);
   const scroll = make("div", { className: "nav-scroll" });
@@ -182,6 +183,7 @@ function render() {
   else if (me.must_change_password) root.replaceChildren(passwordPage());
   else if (page === "password") root.replaceChildren(passwordPage());
   else if (page === "forms") root.replaceChildren(formsPage());
+  else if (page === "checks" && me.role === "student" && me.is_monitor) root.replaceChildren(checksPage(true));
   else if (me.role === "student") root.replaceChildren(
     page === "check" ? checkPage() : page === "mentor" ? mentorPage() : page === "notifications" ? notificationsPage() : profilePage());
   else root.replaceChildren(page === "checks" ? checksPage() : adminPage());
@@ -633,12 +635,19 @@ function notificationsPage() {
       make("strong", { text: "通知已清空" }), "新的节点提醒会在这里出现。")));
     for (const item of data.notifications) {
       const read = button("标记已读", async () => {
-        await post("/api/notifications/" + item.id + "/read", {});
-        read.remove();
+        read.disabled = true;
+        try {
+          await post("/api/notifications/" + item.id + "/read", {});
+          row.classList.add("read");
+          read.remove();
+        } catch (error) {
+          read.disabled = false;
+          row.querySelector("[role=status]").textContent = error.message;
+        }
       });
       const row = make("div", { className: "notice-item" + (item.is_read ? " read" : "") },
         make("span", { className: "notice-dot" }),
-        make("div", {}, make("h2", { text: item.title }), p(item.content), make("time", { text: item.created_at })),
+        make("div", {}, make("h2", { text: item.title }), p(item.content), make("time", { text: item.created_at }), make("p", { className: "small", role: "status" })),
         item.is_read ? null : read);
       shell.append(panel(row));
     }
@@ -686,77 +695,125 @@ async function inspectDocx(file) {
     add("missing-signature", "文末缺少落款（署名与日期）。", "在文末补充署名与日期。");
   return results;
 }
-function showCropEditor(canvas, onConfirm) {
-  const natW = canvas.width, natH = canvas.height;
-  const maxW = Math.round(window.innerWidth * 0.92);
-  const maxH = Math.round(window.innerHeight * 0.74);
-  const scale = Math.min(1, maxW / natW, maxH / natH);
-  const dispW = Math.max(1, Math.round(natW * scale));
-  const dispH = Math.max(1, Math.round(natH * scale));
-  const dataURL = canvas.toDataURL("image/jpeg", 0.92);
-  const handles = [
-    { x: dispW * 0.08, y: dispH * 0.08 },
-    { x: dispW * 0.92, y: dispH * 0.08 },
-    { x: dispW * 0.92, y: dispH * 0.92 },
-    { x: dispW * 0.08, y: dispH * 0.92 }
-  ];
-  const stage = make("div", { className: "crop-stage", style: "width:" + dispW + "px;height:" + dispH + "px" },
-    make("img", { src: dataURL, className: "crop-image", draggable: "false" }));
-  for (const h of handles) {
-    const el = make("div", { className: "crop-handle", style: "left:" + h.x + "px;top:" + h.y + "px;touch-action:none" });
-    let active = false;
-    const moveTo = (cx, cy) => {
-      const rect = stage.getBoundingClientRect();
-      h.x = Math.max(0, Math.min(dispW, cx - rect.left));
-      h.y = Math.max(0, Math.min(dispH, cy - rect.top));
-      el.style.left = h.x + "px";
-      el.style.top = h.y + "px";
-    };
-    const begin = (cx, cy) => { active = true; moveTo(cx, cy); };
-    const end = () => { active = false; };
-    // 触摸（手机/微信）
-    el.addEventListener("touchstart", e => { e.preventDefault(); begin(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
-    el.addEventListener("touchmove", e => { if (active) { e.preventDefault(); moveTo(e.touches[0].clientX, e.touches[0].clientY); } }, { passive: false });
-    el.addEventListener("touchend", end);
-    el.addEventListener("touchcancel", end);
-    // 鼠标（桌面兜底）
-    const onMove = e => { if (active) moveTo(e.clientX, e.clientY); };
-    const onUp = () => { end(); document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); };
-    el.addEventListener("mousedown", e => { e.preventDefault(); begin(e.clientX, e.clientY); document.addEventListener("mousemove", onMove); document.addEventListener("mouseup", onUp); });
-    stage.append(el);
-  }
-  const overlay = make("div", { className: "scan-overlay" },
-    make("div", { className: "scan-overlay-card crop-card" },
-      make("div", { className: "panel-head" }, make("h2", { text: "拖动四角框住纸张" }), make("span", { className: "small", text: "把四个角拖到纸张边缘，再确认裁剪" })),
-      stage,
-      make("div", { className: "upload-actions" },
-        button("取消", () => overlay.remove(), "secondary"),
-        button("确认裁剪", () => {
-          const corners = handles.map(h => ({ x: h.x / dispW * natW, y: h.y / dispH * natH }));
-          overlay.remove();
-          onConfirm(corners);
-        }))));
-  document.body.append(overlay);
-}
+function editScan(initialCanvas, onSelect) {
+  let canvas = initialCanvas;
+  let points, previewUrl;
+  const dialog = make("dialog", { className: "scan-overlay-card", "aria-labelledby": "scan-title" });
+  const heading = make("h2", { id: "scan-title" });
+  const message = make("p", { className: "small", role: "status" });
+  const content = make("div", { className: "scan-content" });
+  const actions = make("div", { className: "upload-actions" });
+  const cancel = () => dialog.close();
+  dialog.append(make("div", { className: "scan-heading" }, heading, message), content, actions);
+  dialog.addEventListener("close", () => { URL.revokeObjectURL(previewUrl); dialog.remove(); }, { once: true });
 
-function showScanPreview(data, onConfirm) {
-  let mode = "gray";
-  const img = make("img", { src: data.gray.dataURL, alt: "扫描预览", className: "scan-preview" });
-  const toggle = button("切换黑白", () => {
-    mode = mode === "gray" ? "bw" : "gray";
-    img.src = data[mode].dataURL;
-    toggle.textContent = mode === "gray" ? "切换黑白" : "切换灰度增强";
-  }, "secondary");
-  const overlay = make("div", { className: "scan-overlay" },
-    make("div", { className: "scan-overlay-card" },
-      make("div", { className: "panel-head" }, make("h2", { text: "扫描效果预览" }), make("span", { className: "small", text: "默认灰度增强，可切换黑白" })),
-      img,
-      make("div", { className: "upload-actions" },
-        toggle,
-        button("取消", () => overlay.remove(), "secondary"),
-        button("确认上传", () => { overlay.remove(); onConfirm(data[mode].blob); }))));
-  document.body.append(overlay);
-  overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+  function crop(reset = false) {
+    URL.revokeObjectURL(previewUrl);
+    if (reset || !points) points = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
+    heading.textContent = "调整纸张边缘";
+    message.textContent = "拖动四角裁剪。纸张已拍完整，可以直接预览。";
+    const stage = make("div", { className: "crop-stage" });
+    stage.style.setProperty("--scan-ratio", String(canvas.width / canvas.height));
+    const svgNS = "http://www.w3.org/2000/svg";
+    const border = document.createElementNS(svgNS, "svg");
+    const outline = document.createElementNS(svgNS, "polygon");
+    border.setAttribute("class", "crop-border");
+    border.setAttribute("viewBox", "0 0 100 100");
+    border.setAttribute("preserveAspectRatio", "none");
+    border.setAttribute("aria-hidden", "true");
+    outline.setAttribute("fill", "#a51f2d18");
+    outline.setAttribute("stroke", "#a51f2d");
+    outline.setAttribute("stroke-width", "2");
+    outline.setAttribute("vector-effect", "non-scaling-stroke");
+    border.append(outline);
+    stage.append(canvas, border);
+    const corners = () => points.map(p => ({ x: p.x * (canvas.width - 1), y: p.y * (canvas.height - 1) }));
+    const confirm = button("预览扫描件", async () => {
+      confirm.disabled = true;
+      message.textContent = "正在生成扫描预览…";
+      try {
+        const full = points.every((p, index) => p.x === (index === 1 || index === 2 ? 1 : 0) && p.y === (index > 1 ? 1 : 0));
+        const result = await processImage(canvas, full ? null : corners());
+        if (dialog.open && confirm.isConnected) preview(result);
+      } catch (error) { message.textContent = error.message; confirm.disabled = false; }
+    });
+    const handles = ["左上", "右上", "右下", "左下"].map((label, i) => {
+      const handle = make("button", { type: "button", className: "crop-handle", "aria-label": label + "角，方向键微调" });
+      let drag = null;
+      const move = (x, y) => {
+        points[i] = { x: Math.max(0, Math.min(1, x)), y: Math.max(0, Math.min(1, y)) };
+        draw();
+      };
+      handle.addEventListener("pointerdown", event => {
+        if (drag || event.button !== 0 || confirm.disabled) return;
+        event.preventDefault();
+        handle.focus({ preventScroll: true });
+        handle.setPointerCapture(event.pointerId);
+        drag = { id: event.pointerId, x: event.clientX, y: event.clientY, startX: points[i].x, startY: points[i].y };
+      });
+      handle.addEventListener("pointermove", event => {
+        if (event.pointerId !== drag?.id) return;
+        const rect = stage.getBoundingClientRect();
+        move(drag.startX + (event.clientX - drag.x) / rect.width, drag.startY + (event.clientY - drag.y) / rect.height);
+      });
+      handle.addEventListener("lostpointercapture", () => { drag = null; });
+      handle.addEventListener("keydown", event => {
+        const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+        if (!step || confirm.disabled) return;
+        event.preventDefault();
+        move(points[i].x + step[0] * .01, points[i].y + step[1] * .01);
+      });
+      stage.append(handle);
+      return handle;
+    });
+    function draw() {
+      const polygon = points.map(({ x, y }, i) => {
+        handles[i].style.left = x * 100 + "%";
+        handles[i].style.top = y * 100 + "%";
+        return x * 100 + "," + y * 100;
+      }).join(" ");
+      outline.setAttribute("points", polygon);
+      const valid = validCrop(corners(), canvas.width, canvas.height);
+      confirm.disabled = !valid;
+      message.textContent = valid ? "拖动四角裁剪。纸张已拍完整，可以直接预览。" : "四角不能交叉或挤在一起，请调整后预览。";
+    }
+    draw();
+    content.replaceChildren(stage);
+    actions.replaceChildren(button("取消", cancel, "secondary"), button("旋转", () => { canvas = rotateScan(canvas); crop(true); }, "secondary"),
+      button("重置四角", () => crop(true), "secondary"), confirm);
+  }
+
+  function preview(result) {
+    heading.textContent = "扫描预览";
+    message.textContent = "默认保留彩色印章，可切换灰度或黑白。";
+    const img = make("img", { className: "scan-preview", alt: "扫描件预览" });
+    const selectMode = make("select", { "aria-label": "扫描效果" }, [["color", "原色"], ["gray", "灰度增强"], ["bw", "黑白"]].map(([value, text]) => make("option", { value, text })));
+    const cached = { color: result.color };
+    let selected = result.color;
+    const use = button("使用扫描件", () => { onSelect(new File([selected], result.name, { type: "image/jpeg" })); cancel(); });
+    const show = blob => {
+      URL.revokeObjectURL(previewUrl);
+      previewUrl = URL.createObjectURL(blob);
+      img.src = previewUrl;
+      selected = blob;
+    };
+    show(selected);
+    selectMode.addEventListener("change", async () => {
+      const mode = selectMode.value;
+      selectMode.disabled = use.disabled = true;
+      try {
+        cached[mode] ??= await result.enhance(mode);
+        if (img.isConnected) show(cached[mode]);
+      } catch (error) { message.textContent = error.message; selectMode.value = Object.keys(cached).find(key => cached[key] === selected); }
+      finally { selectMode.disabled = use.disabled = false; }
+    });
+    content.replaceChildren(img);
+    actions.replaceChildren(button("返回裁剪", () => crop(), "secondary"), selectMode, use);
+  }
+
+  crop();
+  document.body.append(dialog);
+  dialog.showModal();
 }
 
 function checkPage() {
@@ -766,43 +823,49 @@ function checkPage() {
     const materialChoices = data.materials.map(x => [x.id, x.name]);
     const scanInput = make("input", { type: "file", accept: "image/*", capture: "environment", className: "hidden-input", "aria-label": "拍照扫描" });
     const scanButton = button("拍照扫描", () => scanInput.click(), "secondary");
+    const gallery = make("input", { type: "file", accept: "image/*", className: "hidden-input", tabindex: "-1", "aria-label": "扫描照片" });
+    const fileStatus = make("p", { className: "small", role: "status" });
+    let scannedFile = null;
     const form = make("form", { className: "check-form" },
       select("选择材料", "materialId", materialChoices),
       make("label", { className: "upload-drop" },
         make("span", { className: "upload-drop-icon", "aria-hidden": "true", text: "↑" }),
         make("strong", { text: "选择 Word、PDF 或图片" }),
         make("span", { className: "small", text: "点击选择 · 每份最大 10 MB" }),
-        make("input", { name: "file", type: "file", accept: materialAccept, required: "", "aria-label": "材料文件" })),
-      make("div", { className: "upload-actions" }, scanButton, make("button", { className: "btn", type: "submit", text: "检查并提交" })));
-    form.append(scanInput);
-    scanInput.addEventListener("change", async () => {
-      const file = scanInput.files?.[0];
-      scanInput.value = "";
+        make("input", { name: "file", type: "file", accept: materialAccept, "aria-label": "材料文件" })),
+      fileStatus, make("div", { className: "upload-actions" }, scanButton, button("扫描相册图片", () => gallery.click(), "secondary"), make("button", { className: "btn", type: "submit", text: "检查并提交" })));
+    form.append(scanInput, gallery);
+    const input = form.elements.file;
+    input.addEventListener("change", () => {
+      scannedFile = null;
+      fileStatus.textContent = input.files[0]?.name || "";
+    });
+    async function chooseScan(event) {
+      const picker = event.currentTarget;
+      const file = picker.files[0];
+      picker.value = "";
       if (!file) return;
       const release = busy(form);
       try {
         const canvas = await decodeImage(file);
-        showCropEditor(canvas, async corners => {
-          try {
-            const result = await processImage(canvas, corners);
-            showScanPreview(result, blob => {
-              const dt = new DataTransfer();
-              dt.items.add(new File([blob], result.name, { type: "image/jpeg" }));
-              form.elements.file.files = dt.files;
-              feedback(form, "已使用扫描件，点击「检查并提交」上传。", "success");
-            });
-          } catch (error) { feedback(form, error.message); }
+        if (!form.isConnected) return;
+        editScan(canvas, scan => {
+          scannedFile = scan;
+          input.value = "";
+          fileStatus.textContent = "已选扫描件：" + scan.name;
         });
       } catch (error) { feedback(form, error.message); }
       finally { release(); }
-    });
+    }
+    scanInput.addEventListener("change", chooseScan);
+    gallery.addEventListener("change", chooseScan);
     const output = panel(make("div", { className: "panel-head" }, make("h2", { text: "质检结果" })),
       make("div", { className: "empty-state" }, make("strong", { text: "等待检查" }), "选择文件后，提交结果将在这里显示。"));
     form.addEventListener("submit", async event => {
       event.preventDefault();
       const release = busy(form);
       try {
-        const selected = form.elements.file.files[0];
+        const selected = scannedFile || input.files[0];
         const file = selected && normalizedAttachment(selected);
         if (!file || file.size < 1 || file.size > maxFileBytes || !uploadType(file.name)) throw new Error("请选择不超过 10 MB 的 Word、PDF 或图片");
         const inspected = fileExtension(file.name) === "docx";
@@ -811,16 +874,10 @@ function checkPage() {
         data.set("file", file);
         data.set("results", JSON.stringify(results));
         const saved = await api("/api/checks", { method: "POST", body: data });
-        const verifyNote = saved.verify ? notice(
-          saved.verify.isMatch === true ? "系统核对：这看起来是所选材料。"
-            : saved.verify.isMatch === false ? "系统核对：这可能不是所选材料——" + saved.verify.note + "。请确认后重新提交。"
-              : "系统核对：" + saved.verify.note,
-          saved.verify.isMatch === false ? "error" : saved.verify.isMatch === true ? "success" : "info") : null;
         output.replaceChildren(make("div", { className: "panel-head" }, make("h2", { text: inspected ? "质检结果" : "提交结果" }), inspected ? make("span", { className: "small", text: results.length + " 项结果" }) : null),
           inspected ? make("div", { className: "results-list" },
             results.length ? results.map(r => make("div", { className: "result-row" }, make("strong", { text: r.message }), p(r.suggestion))) :
               [make("div", { className: "result-row" }, make("strong", { text: "未发现格式问题" }), p("已完成当前规则检查。"))]) : null,
-          verifyNote,
           notice(inspected ? "文件已提交，DOCX 格式检查已完成。" : "文件已提交，等待人工审阅。", "success"),
           make("a", { className: "text-link", href: "/api/checks/" + saved.id + "/file", text: "下载已保存的材料 →" }));
       } catch (error) { feedback(form, error.message); }
@@ -833,13 +890,16 @@ function checkPage() {
   return shell;
 }
 
-function checksPage() {
-  const shell = make("div", { className: "view view-checks" }, pageHead("STAFF / DOCUMENTS", "已提交文件", "按权限查看并下载学生提交的材料。"), notice("正在读取记录…"));
+function checksPage(monitor = false) {
+  const title = monitor ? "班级材料" : "已提交文件";
+  const description = monitor ? "查看并初审本班提交的材料。" : "按权限查看并下载学生提交的材料。";
+  const shell = make("div", { className: "view view-checks" }, pageHead("STAFF / DOCUMENTS", title, description), notice("正在读取记录…"));
   (async () => { try {
     const data = await api("/api/checks");
     const selected = new Set();
     const count = make("span", { className: "bulk-count", text: "已选 0 份" });
-    const checks = data.checks.filter(x => x.review_status === "待审阅");
+    const canReview = x => x.review_status === "待审阅" && (monitor ? !x.monitor_approved : !!x.monitor_approved);
+    const checks = data.checks.filter(canReview);
     const table = make("table", { className: "data" },
       make("thead", {}, make("tr", {},
         make("th", { className: "bulk-select" }, make("input", { type: "checkbox", "aria-label": "选择全部待审阅材料", onchange: event => {
@@ -847,14 +907,14 @@ function checksPage() {
         } })),
         ["学生", "材料", "文件", "审阅状态", "检查时间"].map(x => make("th", { text: x })))),
       make("tbody", {}, data.checks.map(x => make("tr", {},
-        make("td", { className: "bulk-select" }, x.review_status === "待审阅" ? make("input", { type: "checkbox", value: x.id, "aria-label": "选择 " + (x.student_name || x.student_id) + " 的 " + x.material_name, onchange: event => {
+        make("td", { className: "bulk-select" }, canReview(x) ? make("input", { type: "checkbox", value: x.id, "aria-label": "选择 " + (x.student_name || x.student_id) + " 的 " + x.material_name, onchange: event => {
           if (event.target.checked) selected.add(x.id); else selected.delete(x.id);
           count.textContent = "已选 " + selected.size + " 份";
         } }) : null),
         make("td", { text: x.student_name || String(x.student_id) }),
         make("td", { text: x.material_name }),
         make("td", {}, make("a", { href: "/api/checks/" + x.id + "/file", text: x.filename })),
-        make("td", {}, make("span", { className: "review-pill " + (x.review_status === "已通过" ? "approved" : x.review_status === "退回修改" ? "returned" : ""), text: x.review_status || "待审阅", title: x.review_note || "" })),
+        make("td", {}, make("span", { className: "review-pill " + (x.review_status === "已通过" ? "approved" : x.review_status === "退回修改" ? "returned" : ""), text: x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待班长初审" : x.review_status, title: x.review_note || "" })),
         make("td", { text: x.checked_at })))));
     const note = field("退回修改说明", "reviewNote", "text", false);
     const review = async status => {
@@ -867,14 +927,22 @@ function checksPage() {
         render();
       } catch (error) { feedback(tools, error.message); }
     };
-    const tools = make("div", { className: "bulk-tools" }, count,
+    const approve = async () => {
+      if (!selected.size) return feedback(tools, "请先选择待初审材料");
+      try {
+        await post("/api/checks/monitor-approve", { checkIds: [...selected] });
+        render();
+      } catch (error) { feedback(tools, error.message); }
+    };
+    const tools = monitor ? make("div", { className: "bulk-tools" }, count, button("初审通过", approve)) :
+      make("div", { className: "bulk-tools" }, count,
       button("批量通过", () => review("已通过")), note,
       button("批量退回", () => review("退回修改"), "secondary"));
-    shell.replaceChildren(pageHead("STAFF / DOCUMENTS", "已提交文件", "按权限查看并下载学生提交的材料。"),
+    shell.replaceChildren(pageHead("STAFF / DOCUMENTS", title, description),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "学生提交记录" }), make("span", { className: "small", text: "待审阅 " + checks.length + " / 共 " + data.checks.length + " 条" })),
         data.checks.length ? tools : null,
         data.checks.length ? tableWrap(table) : make("div", { className: "empty-state" }, make("strong", { text: "暂无质检记录" }), "学生上传材料后会在这里显示。")));
-  } catch (error) { shell.replaceChildren(pageHead("STAFF / DOCUMENTS", "已提交文件"), notice(error.message, "error")); } })();
+  } catch (error) { shell.replaceChildren(pageHead("STAFF / DOCUMENTS", title), notice(error.message, "error")); } })();
   return shell;
 }
 
@@ -934,7 +1002,8 @@ function adminPage() {
   const adminCode = me.role === "admin" ? "ADMIN / CONSOLE" : "COUNSELOR / CONSOLE";
   const shell = make("div", { className: "view view-admin" }, pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"), notice("正在读取数据…"));
   (async () => { try {
-    const data = await api("/api/admin/dashboard");
+    const filters = new URLSearchParams(location.search);
+    const data = await api("/api/admin/dashboard?" + filters);
     const collegeChoices = data.colleges.map(x => [x.id, x.name]);
     const majorLabel = id => (data.majors.find(m => m.id === id)?.name || "") + " · " + (data.colleges.find(c => c.id === (data.majors.find(m => m.id === id)?.college_id))?.name || "");
     const majorChoices = data.majors.map(x => [x.id, majorLabel(x.id)]);
@@ -949,7 +1018,7 @@ function adminPage() {
       event.preventDefault();
       const q = formData(searchForm).q.trim();
       const url = new URL(location.href); url.hash = "#admin";
-      if (q) url.search = "?q=" + encodeURIComponent(q); else url.search = "";
+      if (q) url.searchParams.set("q", q); else url.searchParams.delete("q");
       history.replaceState(null, "", url); render();
     });
     const inviteForm = make("form", { className: "inline-form" },
@@ -1091,12 +1160,21 @@ function adminPage() {
             make("td", { text: cls.name }),
             make("td", { text: data.majors.find(m => m.id === cls.major_id)?.name || "" }),
             make("td", { text: data.students.find(s => s.id === cls.monitor_user_id)?.name || "未设置" }),
-            make("td", {}, button("查看学生", () => { history.replaceState(null, "", "?q=&"); navigate("admin"); }, "secondary"))))))) : null),
+            make("td", {}, button("查看学生", () => {
+              history.replaceState(null, "", "?classId=" + cls.id + "#admin");
+              render();
+            }, "secondary"))))))) : null),
       ...(me.role === "admin" ? [
         ...(!needCollege ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "学院与专业设置" })), collegeForm, majorForm)] : [panel(make("div", { className: "panel-head" }, make("h2", { text: "学院与专业设置" })), collegeForm)]),
         ...(!needMajor ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "邀请辅导员" })), inviteForm, inviteOutput)] : [])
       ] : []),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "学生档案" }), make("span", { className: "small", text: "共 " + data.students.length + " 人" })),
+        filters.has("classId") ? button("清除班级筛选", () => {
+          const url = new URL(location.href);
+          url.searchParams.delete("classId");
+          history.replaceState(null, "", url);
+          render();
+        }, "secondary") : null,
         data.students.length ? bulkTools : null,
         data.students.length ? tableWrap(students) : make("div", { className: "empty-state" }, make("strong", { text: "尚无学生" }), "打开办公助理上传入围名单，或在上方手动添加。")));
   } catch (error) { shell.replaceChildren(pageHead(adminCode, adminTitle), notice(error.message, "error")); } })();

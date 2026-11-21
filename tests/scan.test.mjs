@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { grayscale, adaptiveThreshold, autoContrast, illuminationFlatten, bradleyThreshold, warpPerspective, findDocumentCorners, contentBBox } from "../frontend/scan.js";
+import { grayscale, adaptiveThreshold, autoContrast, illuminationFlatten, bradleyThreshold, warpPerspective, findDocumentCorners, contentBBox, validCrop } from "../frontend/scan.js";
+
+test("裁剪包含照片边缘并拒绝交叉、重合及越界的四角", () => {
+  const [tl, tr, br, bl] = [{ x: 0, y: 0 }, { x: 399, y: 0 }, { x: 399, y: 599 }, { x: 0, y: 599 }];
+  assert.equal(validCrop([tl, tr, br, bl], 400, 600), true);
+  assert.equal(validCrop([tl, br, tr, bl], 400, 600), false);
+  assert.equal(validCrop([tl, tl, br, bl], 400, 600), false);
+  assert.equal(validCrop([tl, { ...tr, x: 400 }, br, bl], 400, 600), false);
+});
 
 const solid = (w, h, rgb) => ({ width: w, height: h, data: (() => { const d = new Uint8ClampedArray(w * h * 4); for (let i = 0; i < w * h; i++) { d[i * 4] = rgb[0]; d[i * 4 + 1] = rgb[1]; d[i * 4 + 2] = rgb[2]; d[i * 4 + 3] = 255; } return d; })() });
 

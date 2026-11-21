@@ -271,34 +271,6 @@ async function deepSeekContent(env, payload) {
   if (typeof content !== "string" || !content.trim()) throw mentorFailure("M-106");
   return content.trim();
 }
-function toBase64(bytes) {
-  let bin = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  return btoa(bin);
-}
-const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "webp", "gif"]);
-async function verifyMaterialImage(env, file, materialName) {
-  try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const b64 = toBase64(bytes);
-    const mime = file.type || "image/jpeg";
-    const raw = await deepSeekContent(env, {
-      model: "deepseek-flash",
-      messages: [{ role: "user", content: [
-        { type: "text", text: "这是一份党员发展材料。请判断这张图片里的文档是否属于《" + materialName + "》。只输出 JSON 对象：{\"isMatch\": true 或 false, \"note\": \"一句话理由\"}。" },
-        { type: "image_url", image_url: { url: "data:" + mime + ";base64," + b64 } }
-      ] }],
-      max_tokens: 300, temperature: 0
-    });
-    const isMatch = /"isMatch"\s*:\s*(true|false)/i.exec(raw);
-    const note = /"note"\s*:\s*"([^"]*)"/i.exec(raw);
-    return { isMatch: isMatch ? isMatch[1].toLowerCase() === "true" : null, note: note ? note[1] : raw.slice(0, 160) };
-  } catch (error) {
-    console.error("material verify failed", error?.message || error);
-    return { isMatch: null, note: "核对失败，已跳过。" };
-  }
-}
 async function logMentorQuestion(env, user, question, decision) {
   try {
     await env.DB.prepare("INSERT INTO mentor_question_logs(user_id,question,intent,top_similarity,outcome) VALUES(?,?,?,?,?)")
@@ -486,22 +458,22 @@ export async function checkRoutes(request, env, path, user) {
         env.DB.prepare("INSERT INTO material_records(student_id,material_id,status,r2_key,filename,submitted_at) VALUES(?,?,'已交',?,?,?) ON CONFLICT(student_id,material_id) DO UPDATE SET status='已交',r2_key=excluded.r2_key,filename=excluded.filename,submitted_at=excluded.submitted_at")
           .bind(user.id, materialId, key, filename, iso())
       ]);
-      // 覆盖上传：删除同一学生同一材料的旧版本，只保留最新一份
-      const previous = await env.DB.prepare("SELECT id,r2_key FROM checks WHERE student_id=? AND material_id=? AND id<>?").bind(user.id, materialId, checkId).all();
-      if (previous.results.length) {
-        const ids = previous.results.map(item => item.id);
-        const marks = ids.map(() => "?").join(",");
-        await env.DB.batch([
-          env.DB.prepare("DELETE FROM check_results WHERE check_id IN (" + marks + ")").bind(...ids),
-          env.DB.prepare("DELETE FROM checks WHERE id IN (" + marks + ")").bind(...ids)
-        ]);
-        await Promise.allSettled(previous.results.map(item => env.FILES.delete(item.r2_key)));
+      try {
+        // 覆盖上传：删除同一学生同一材料的旧版本，只保留最新一份
+        const previous = await env.DB.prepare("SELECT id,r2_key FROM checks WHERE student_id=? AND material_id=? AND id<? AND r2_key NOT IN (SELECT r2_key FROM material_records WHERE student_id=? AND material_id=? AND r2_key IS NOT NULL)").bind(user.id, materialId, checkId, user.id, materialId).all();
+        if (previous.results.length) {
+          const ids = previous.results.map(item => item.id);
+          const marks = ids.map(() => "?").join(",");
+          await env.DB.batch([
+            env.DB.prepare("DELETE FROM check_results WHERE check_id IN (" + marks + ")").bind(...ids),
+            env.DB.prepare("DELETE FROM checks WHERE id IN (" + marks + ")").bind(...ids)
+          ]);
+          await Promise.allSettled(previous.results.map(item => env.FILES.delete(item.r2_key)));
+        }
+      } catch (error) {
+        console.error("previous submission cleanup failed", error?.message);
       }
-      let verify = null;
-      if (IMAGE_EXTS.has(type.ext) && file.size <= 4 * 1024 * 1024 && env.DEEPSEEK_API_KEY) {
-        verify = await verifyMaterialImage(env, file, material.name);
-      }
-      return json({ ok: true, id: checkId, results, verify }, 201);
+      return json({ ok: true, id: checkId, results }, 201);
     } catch (error) {
       if (checkId) await env.DB.prepare("DELETE FROM checks WHERE id=?").bind(checkId).run();
       await env.FILES.delete(key);
@@ -822,9 +794,11 @@ export async function adminRoutes(request, env, path, user) {
     return json({ ok: true, count: students.length }, 201);
   }
   if (path === "/api/admin/dashboard" && request.method === "GET") {
-    const q = clean(new URL(request.url).searchParams.get("q") || "", 50);
+    const filters = new URL(request.url).searchParams;
+    const q = clean(filters.get("q") || "", 50);
     const cond = [], args = [];
     if (user.role !== "admin") { cond.push("cl.major_id=?"); args.push(user.major_id); }
+    if (filters.has("classId")) { cond.push("u.class_id=?"); args.push(id(filters.get("classId"))); }
     if (q) { cond.push("(p.name LIKE ? OR p.student_no LIKE ?)"); args.push("%" + q + "%", "%" + q + "%"); }
     const where = cond.length ? " WHERE " + cond.join(" AND ") : "";
     const students = await env.DB.prepare("SELECT u.id,u.username,u.class_id,cl.name AS class_name,cl.major_id,m.name AS major_name,m.college_id,d.name AS college_name,p.* FROM users u JOIN profiles p ON p.user_id=u.id LEFT JOIN classes cl ON cl.id=u.class_id LEFT JOIN majors m ON m.id=cl.major_id LEFT JOIN departments d ON d.id=m.college_id" + where + " ORDER BY p.student_no LIMIT 500").bind(...args).all();

@@ -300,29 +300,57 @@ export function contentBBox(gray, w, h, margin = 0.02) {
 
 // ---- 浏览器入口（依赖 Canvas） ----
 
-async function decodeToCanvas(file) {
-  try {
-    const bmp = await createImageBitmap(file);
-    const c = document.createElement("canvas");
-    c.width = bmp.width; c.height = bmp.height;
-    c.getContext("2d").drawImage(bmp, 0, 0);
-    bmp.close();
-    return c;
-  } catch {
-    const url = URL.createObjectURL(file);
+function resizedCanvas(source, width, height, maxDim) {
+  const scale = Math.min(1, maxDim / Math.max(width, height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const ctx = canvas.getContext("2d", { alpha: false });
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+export async function decodeImage(file, maxDim = 2200) {
+  if (typeof createImageBitmap === "function") {
     try {
-      const img = await new Promise((res, rej) => {
-        const el = new Image();
-        el.onload = () => res(el);
-        el.onerror = () => rej(new Error("无法解码图片"));
-        el.src = url;
-      });
-      const c = document.createElement("canvas");
-      c.width = img.naturalWidth; c.height = img.naturalHeight;
-      c.getContext("2d").drawImage(img, 0, 0);
-      return c;
-    } finally { URL.revokeObjectURL(url); }
+      const bitmap = await createImageBitmap(file);
+      try { return resizedCanvas(bitmap, bitmap.width, bitmap.height, maxDim); }
+      finally { bitmap.close(); }
+    } catch { /* Some browsers support more image formats through an image element. */ }
   }
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("此浏览器无法解码这张图。可直接提交原图，或将 HEIC 转成 JPG 后再扫描。"));
+      el.src = url;
+    });
+    return resizedCanvas(img, img.naturalWidth, img.naturalHeight, maxDim);
+  } finally { URL.revokeObjectURL(url); }
+}
+
+export function validCrop(corners, w, h) {
+  if (!Array.isArray(corners) || corners.length !== 4 ||
+    corners.some(p => !Number.isFinite(p?.x) || !Number.isFinite(p?.y) || p.x < 0 || p.x >= w || p.y < 0 || p.y >= h)) return false;
+  const min = Math.max(2, Math.min(w, h) * .04);
+  return corners.every((a, i) => {
+    const b = corners[(i + 1) % 4], c = corners[(i + 2) % 4];
+    return Math.hypot(b.x - a.x, b.y - a.y) >= min &&
+      (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x) >= min * min / 2;
+  });
+}
+
+export function rotateScan(canvas) {
+  const rotated = document.createElement("canvas");
+  rotated.width = canvas.height; rotated.height = canvas.width;
+  const ctx = rotated.getContext("2d");
+  ctx.translate(rotated.width, 0);
+  ctx.rotate(Math.PI / 2);
+  ctx.drawImage(canvas, 0, 0);
+  return rotated;
 }
 
 function canvasToBlob(canvas, quality = 0.9) {
@@ -345,54 +373,35 @@ function grayToCanvas(pixels, w, h) {
 
 const oddClamp = (v, lo, hi) => { let x = Math.max(lo, Math.min(hi, v | 0)); if ((x & 1) === 0) x++; return x; };
 
-// 解码照片为 canvas（下采样到 maxDim，供裁剪显示与处理）
-export async function decodeImage(file, maxDim = 1600) {
-  const full = await decodeToCanvas(file);
-  const scale = Math.min(1, maxDim / Math.max(full.width, full.height));
-  if (scale >= 1) return full;
-  const w = Math.max(1, Math.round(full.width * scale));
-  const h = Math.max(1, Math.round(full.height * scale));
-  const c = document.createElement("canvas");
-  c.width = w; c.height = h;
-  c.getContext("2d").drawImage(full, 0, 0, w, h);
-  return c;
-}
-
-// 由用户裁剪的四角（顺时针 TL/TR/BR/BL，像素坐标）做透视摆正 + 增强，
-// 返回灰度增强与黑白两档的结果。corners 传 null 则整幅处理。
+// The color image preserves seals and annotations; enhancement is optional.
 export async function processImage(canvas, corners) {
-  const w = canvas.width, h = canvas.height;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  const img = ctx.getImageData(0, 0, w, h);
-  const gray = grayscale(img);
-
-  let regionGray, regionW, regionH;
-  if (corners && corners.length === 4 && corners.every(c => c && isFinite(c.x) && isFinite(c.y))) {
-    const wTop = Math.hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y);
-    const wBot = Math.hypot(corners[2].x - corners[3].x, corners[2].y - corners[3].y);
-    const hL = Math.hypot(corners[3].x - corners[0].x, corners[3].y - corners[0].y);
-    const hR = Math.hypot(corners[2].x - corners[1].x, corners[2].y - corners[1].y);
-    regionW = Math.max(1, Math.round((wTop + wBot) / 2));
-    regionH = Math.max(1, Math.round((hL + hR) / 2));
-    regionGray = grayscale(warpPerspective(img, corners, regionW, regionH));
-  } else {
-    regionGray = gray; regionW = w; regionH = h;
+  const { width, height } = canvas;
+  if (corners && !validCrop(corners, width, height)) throw new Error("四角顺序或裁剪范围无效，请重新调整。");
+  const source = canvas.getContext("2d").getImageData(0, 0, width, height);
+  let region = source;
+  if (corners) {
+    const edge = (a, b) => Math.hypot(corners[b].x - corners[a].x, corners[b].y - corners[a].y);
+    const w = Math.round((edge(0, 1) + edge(2, 3)) / 2) + 1;
+    const h = Math.round((edge(0, 3) + edge(1, 2)) / 2) + 1;
+    const scale = Math.min(1, 2200 / Math.max(w, h));
+    region = warpPerspective(source, corners, Math.max(2, Math.round(w * scale)), Math.max(2, Math.round(h * scale)));
   }
+  const color = document.createElement("canvas");
+  const w = color.width = region.width, h = color.height = region.height;
+  const ctx = color.getContext("2d");
+  const image = ctx.createImageData(w, h);
+  image.data.set(region.data);
+  ctx.putImageData(image, 0, 0);
+  const name = "扫描_" + new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "") + ".jpg";
 
-  // 光照展平 → 消除阴影，再增强
-  const radius = Math.max(8, Math.round(Math.min(regionW, regionH) / 12));
-  const flat = illuminationFlatten(regionGray, regionW, regionH, radius);
-  const grayEnhanced = autoContrast(flat, regionW, regionH);
-  const win = oddClamp(Math.round(Math.min(regionW, regionH) / 16), 15, 255);
-  const bw = bradleyThreshold(flat, regionW, regionH, win, 0.15);
-
-  const grayCanvas = grayToCanvas(grayEnhanced, regionW, regionH);
-  const bwCanvas = grayToCanvas(bw, regionW, regionH);
-  const ts = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 14);
-  const name = "扫描_" + ts + ".jpg";
   return {
-    width: regionW, height: regionH, name,
-    gray: { dataURL: grayCanvas.toDataURL("image/jpeg", 0.9), blob: await canvasToBlob(grayCanvas) },
-    bw: { dataURL: bwCanvas.toDataURL("image/jpeg", 0.9), blob: await canvasToBlob(bwCanvas) }
+    name, color: await canvasToBlob(color, .94),
+    async enhance(mode) {
+      const gray = grayscale(region);
+      const flat = illuminationFlatten(gray, w, h, Math.max(8, Math.round(Math.min(w, h) / 12)));
+      const pixels = mode === "bw" ? bradleyThreshold(flat, w, h, oddClamp(Math.round(Math.min(w, h) / 16), 15, 255), .15)
+        : autoContrast(flat, w, h);
+      return canvasToBlob(grayToCanvas(pixels, w, h));
+    }
   };
 }

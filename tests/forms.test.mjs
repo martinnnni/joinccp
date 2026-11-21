@@ -109,13 +109,10 @@ test("学生提交 DOCX 后材料状态写为已交", async () => {
   assert.equal(savedRecord, true);
 });
 
-test("图片提交后调用 DeepSeek 视觉核对是否对应材料", async () => {
+test("图片提交不向外部模型发送原件", async () => {
   const previousFetch = globalThis.fetch;
-  let sentPayload = null;
-  globalThis.fetch = async (_url, options) => {
-    sentPayload = JSON.parse(options.body);
-    return new Response(JSON.stringify({ choices: [{ message: { content: '{"isMatch":true,"note":"是申请书"}' } }] }), { status: 200 });
-  };
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error("unexpected external request"); };
   const env = {
     DEEPSEEK_API_KEY: "test",
     DB: { prepare(sql) { return {
@@ -135,8 +132,7 @@ test("图片提交后调用 DeepSeek 视觉核对是否对应材料", async () =
     const res = await checkRoutes(req, env, "/api/checks", student);
     const data = await res.json();
     assert.equal(res.status, 201);
-    assert.equal(data.verify.isMatch, true);
-    assert.ok(sentPayload.messages[0].content.some(p => p.type === "image_url"));
-    assert.match(sentPayload.messages[0].content[0].text, /入党申请书/);
+    assert.equal(data.id, 12);
+    assert.equal(calls, 0);
   } finally { globalThis.fetch = previousFetch; }
 });

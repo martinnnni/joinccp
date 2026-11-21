@@ -572,11 +572,11 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
 .result-row p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 
 /* ---------- 通知 ---------- */
-.notice-item { display: grid; grid-template-columns: 2px 1fr auto; gap: 18px; align-items: start; }
+.notice-item { display: grid; grid-template-columns: 2px minmax(0, 1fr) auto; gap: 18px; align-items: start; overflow-wrap: anywhere; }
 .notice-dot { height: 36px; border-radius: 1px; background: var(--accent); }
 .notice-item.read .notice-dot { background: var(--line-strong); }
 .notice-item h2 { margin: 0 0 5px; font-size: 18px; }
-.notice-item p { margin: 0; color: var(--muted); }
+.notice-item p { margin: 0; color: var(--muted); white-space: pre-wrap; }
 .notice-item time { color: var(--muted); font: 13px var(--mono); }
 .invite-output { margin-top: 20px; overflow-wrap: anywhere; color: var(--muted); }
 
@@ -684,7 +684,8 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
   .container { width: min(100% - 40px, 1370px); }
   .header-inner { width: min(100% - 40px, 1370px); }
   .school-wordmark { width: 184px; }
-  .nav { gap: 14px; }
+  .nav { gap: 8px; align-items: flex-start; }
+  .nav-scroll { flex-wrap: wrap; gap: 0 12px; overflow: visible; }
   .nav a, .nav .linklike { font-size: 14px; }
   .auth-layout { display: block; min-height: 0; }
   .auth-story { min-height: min(66svh, 500px); padding: 32px 20px 24px; }
@@ -735,14 +736,43 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
 /* ---------- 拍照扫描 ---------- */
 .hidden-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .upload-actions { display: flex; gap: 12px; justify-content: center; margin-top: 4px; flex-wrap: wrap; }
-.scan-overlay { position: fixed; inset: 0; background: rgba(20, 12, 15, .55); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 16px; }
-.scan-overlay-card { background: #fff; border-radius: 14px; max-width: 92vw; max-height: 92vh; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 20px 60px rgba(0, 0, 0, .35); }
-.scan-overlay-card .panel-head { margin-bottom: 0; }
-.scan-preview { max-width: 100%; max-height: 66vh; object-fit: contain; background: #eee; border-radius: 8px; }
-.crop-stage { position: relative; margin: 0 auto; background: #222; border-radius: 6px; overflow: hidden; }
-.crop-stage .crop-image { display: block; width: 100%; height: 100%; -webkit-user-drag: none; user-select: none; }
-.crop-handle { position: absolute; width: 24px; height: 24px; margin: -12px 0 0 -12px; border-radius: 50%; background: var(--accent, #d22); border: 2px solid #fff; cursor: move; box-shadow: 0 0 0 2px rgba(0,0,0,.3); z-index: 2; }
-.crop-card .panel-head { margin-bottom: 0; }
+body:has(.scan-overlay-card[open]) { overflow: hidden; }
+.scan-overlay-card {
+  box-sizing: border-box;
+  width: min(calc(100% - 24px), 780px);
+  max-width: none;
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  margin: auto;
+  border: 0;
+  border-radius: 14px;
+  padding: clamp(12px, 3vw, 20px);
+  color: var(--ink);
+  background: #fff;
+}
+.scan-overlay-card::backdrop { background: rgba(20, 12, 15, .65); }
+.scan-heading h2 { margin: 0 0 4px; font-size: 19px; }
+.scan-heading p { margin: 0 0 12px; }
+.scan-content { display: grid; justify-items: center; min-width: 0; padding: 20px; }
+.scan-preview { display: block; max-width: 100%; max-height: 60dvh; object-fit: contain; background: #eee; border-radius: 8px; }
+.crop-stage { position: relative; width: min(100%, calc(53vh * var(--scan-ratio))); width: min(100%, calc(53dvh * var(--scan-ratio))); }
+.crop-stage canvas { display: block; width: 100%; height: auto; user-select: none; }
+.crop-border { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.crop-handle {
+  position: absolute; width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; transform: translate(-50%, -50%); touch-action: none; cursor: grab;
+}
+.crop-handle::after {
+  content: ""; position: absolute; inset: 10px; border: 2px solid #fff; border-radius: inherit;
+  background: var(--accent); box-shadow: 0 0 0 1px rgba(0,0,0,.45);
+}
+.scan-overlay-card .upload-actions > * { flex: 0 1 auto; width: auto; min-width: 0; }
+.scan-overlay-card .upload-actions { position: sticky; bottom: -12px; background: #fff; padding: 8px 0; }
+.check-form .upload-actions { justify-content: flex-start; }
+.check-form .upload-actions > * { min-width: 0; }
+.check-form [role=status] { overflow-wrap: anywhere; }
 
 /* ---------- 减少动态偏好 ---------- */
 @media (prefers-reduced-motion: reduce) {
