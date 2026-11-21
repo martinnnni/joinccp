@@ -4,6 +4,7 @@ import { extractReviewText } from "./file-text.js";
 import { extractRosterText } from "./roster.js";
 import { deriveVerifier } from "./pbkdf2.js";
 import { fileExtension, materialAccept, maxBatchBytes, maxFileBytes, normalizedAttachment, officeAccept, uploadType } from "../upload-types.js";
+import { scanImage } from "./scan.js";
 
 const root = document.getElementById("app");
 const navigation = document.getElementById("navigation");
@@ -685,11 +686,25 @@ async function inspectDocx(file) {
     add("missing-signature", "文末缺少落款（署名与日期）。", "在文末补充署名与日期。");
   return results;
 }
+function showScanPreview(dataURL, onConfirm) {
+  const overlay = make("div", { className: "scan-overlay" },
+    make("div", { className: "scan-overlay-card" },
+      make("div", { className: "panel-head" }, make("h2", { text: "扫描效果预览" }), make("span", { className: "small", text: "确认无误后作为材料上传" })),
+      make("img", { src: dataURL, alt: "扫描预览", className: "scan-preview" }),
+      make("div", { className: "upload-actions" },
+        button("重拍", () => overlay.remove(), "secondary"),
+        button("确认上传", () => { overlay.remove(); onConfirm(); }))));
+  document.body.append(overlay);
+  overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+}
+
 function checkPage() {
   const shell = make("div", { className: "view view-check" }, pageHead("STUDENT / SUBMISSION", "材料提交", "上传 Word、PDF 或图片，提交后可在材料记录中查看。"), notice("正在读取材料列表…"));
   (async () => { try {
     const data = await api("/api/materials");
     const materialChoices = data.materials.map(x => [x.id, x.name]);
+    const scanInput = make("input", { type: "file", accept: "image/*", capture: "environment", className: "hidden-input", "aria-label": "拍照扫描" });
+    const scanButton = button("拍照扫描", () => scanInput.click(), "secondary");
     const form = make("form", { className: "check-form" },
       select("选择材料", "materialId", materialChoices),
       make("label", { className: "upload-drop" },
@@ -697,7 +712,25 @@ function checkPage() {
         make("strong", { text: "选择 Word、PDF 或图片" }),
         make("span", { className: "small", text: "点击选择 · 每份最大 10 MB" }),
         make("input", { name: "file", type: "file", accept: materialAccept, required: "", "aria-label": "材料文件" })),
-      make("button", { className: "btn", type: "submit", text: "检查并提交" }));
+      make("div", { className: "upload-actions" }, scanButton, make("button", { className: "btn", type: "submit", text: "检查并提交" })));
+    form.append(scanInput);
+    scanInput.addEventListener("change", async () => {
+      const file = scanInput.files?.[0];
+      scanInput.value = "";
+      if (!file) return;
+      const release = busy(form);
+      try {
+        const result = await scanImage(file);
+        const scanned = new File([result.blob], result.name, { type: "image/jpeg" });
+        showScanPreview(result.dataURL, () => {
+          const dt = new DataTransfer();
+          dt.items.add(scanned);
+          form.elements.file.files = dt.files;
+          feedback(form, "已使用扫描件，点击「检查并提交」上传。", "success");
+        });
+      } catch (error) { feedback(form, error.message); }
+      finally { release(); }
+    });
     const output = panel(make("div", { className: "panel-head" }, make("h2", { text: "质检结果" })),
       make("div", { className: "empty-state" }, make("strong", { text: "等待检查" }), "选择文件后，提交结果将在这里显示。"));
     form.addEventListener("submit", async event => {
