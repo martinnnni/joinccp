@@ -733,7 +733,7 @@ function showCropEditor(canvas, onConfirm) {
       make("div", { className: "panel-head" }, make("h2", { text: "拖动四角框住纸张" }), make("span", { className: "small", text: "把四个角拖到纸张边缘，再确认裁剪" })),
       stage,
       make("div", { className: "upload-actions" },
-        button("重拍", () => overlay.remove(), "secondary"),
+        button("取消", () => overlay.remove(), "secondary"),
         button("确认裁剪", () => {
           const corners = handles.map(h => ({ x: h.x / dispW * natW, y: h.y / dispH * natH }));
           overlay.remove();
@@ -756,7 +756,7 @@ function showScanPreview(data, onConfirm) {
       img,
       make("div", { className: "upload-actions" },
         toggle,
-        button("重拍", () => overlay.remove(), "secondary"),
+        button("取消", () => overlay.remove(), "secondary"),
         button("确认上传", () => { overlay.remove(); onConfirm(data[mode].blob); }))));
   document.body.append(overlay);
   overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
