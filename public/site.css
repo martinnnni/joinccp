@@ -447,6 +447,18 @@ body[data-page=bootstrap] .auth-form > .field:last-of-type { grid-column: 1/-1; 
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
 .form-grid .field.wide, .form-grid > .notice { grid-column: 1/-1; }
 .form-grid > .btn { grid-column: 1/-1; justify-self: start; }
+.form-feedback {
+  grid-column: 1 / -1;
+  flex-basis: 100%;
+  min-width: 0;
+  margin: 0;
+  color: var(--accent);
+  font-size: .8125rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.form-feedback:empty { display: none; }
+.form-feedback[data-kind="success"] { color: var(--success); }
 .form-note { font-size: 13px; }
 
 /* ---------- 按钮（单一系统） ---------- */

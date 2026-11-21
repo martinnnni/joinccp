@@ -96,6 +96,7 @@ const select = (label, name, choices, value = "") => make("label", { className: 
       : make("option", { value: "", text: "暂无可选项" })));
 const notice = (text, type = "info") => make("p", { className: "notice " + type, text });
 const busy = form => {
+  clearFeedback(form);
   const submit = form.querySelector("[type=submit]");
   if (submit) submit.disabled = true;
   return () => { if (submit) submit.disabled = false; };
@@ -126,10 +127,19 @@ async function api(path, options = {}) {
   return data;
 }
 const post = (path, data) => api(path, { method: "POST", body: JSON.stringify(data) });
-function feedback(form, message, kind = "error") {
-  const old = form.querySelector(".notice");
-  if (old) old.remove();
-  form.prepend(notice(message, kind));
+function clearFeedback(container) {
+  const status = container.querySelector(":scope > .form-feedback");
+  if (status) status.textContent = "";
+}
+function feedback(container, message, kind = "error") {
+  let status = container.querySelector(":scope > .form-feedback");
+  if (!status) {
+    status = make("p", { className: "form-feedback", role: "status", "aria-atomic": "true" });
+    container.append(status);
+    container.addEventListener("input", () => clearFeedback(container));
+  }
+  status.dataset.kind = kind;
+  status.textContent = message;
 }
 function formData(form) { return Object.fromEntries(new FormData(form)); }
 function randomHex(size) {
