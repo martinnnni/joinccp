@@ -1,12 +1,12 @@
-# 党员发展计划辅助系统 · Cloudflare 测试版
+# 党员发展计划辅助系统 
 
 **线上网站：**[joinccp.martinzhang.asia](https://joinccp.martinzhang.asia/) · [成长导师](https://joinccp.martinzhang.asia/#mentor)
 
-**协作发布：**朋友从分支提出 Pull Request，GitHub 自动运行测试并请求仓库所有者审阅。所有者在 GitHub 批准后，把 PR 链接交给 Codex；Codex 核对批准记录与测试结果，再合并并部署到上述网站。操作细节见 [CONTRIBUTING.md](CONTRIBUTING.md)。Cloudflare 部署凭据仅保留在所有者本机，不写入 GitHub。
+**协作发布：**从分支提出 Pull Request，GitHub 自动运行测试并请求仓库所有者审阅。所有者在 GitHub 批准后，把 PR 链接交给 Codex；Codex 核对批准记录与测试结果，再合并并部署到上述网站。操作细节见 [CONTRIBUTING.md](CONTRIBUTING.md)。Cloudflare 部署凭据仅保留在所有者本机，不写入 GitHub。
 
 此目录将原 Django 项目改写为 Cloudflare Worker。原业务源码保存在 legacy/，未复制压缩包中的密钥文件、本机虚拟环境、工具源码和日志。
 
-页眉使用[中国民航大学官网](https://www.cauc.edu.cn/zhv5/)的校徽与校名题字图片（`public/cauc-wordmark.png`）；项目名称沿用原项目的“党员发展计划辅助系统”。当前界面借鉴 martinzhang.asia 博客的大字号排版、细网格与轨道图形，保持白底。拉丁字形使用开源的 [Space Grotesk](https://github.com/floriankarsten/space-grotesk) 与 [DM Mono](https://github.com/googlefonts/dm-mono)，授权文本位于 `public/fonts/`。
+页眉使用中国民航大学的校徽与校名题字图片；项目名称沿用原项目的“党员发展计划辅助系统”。当前界面借鉴开发者 martinzhang.asia 博客的大字号排版、细网格与轨道图形，保持白底。拉丁字形使用开源的 [Space Grotesk](https://github.com/floriankarsten/space-grotesk) 与 [DM Mono](https://github.com/googlefonts/dm-mono)，授权文本位于 `public/fonts/`。
 
 当前界面使用 `public/site.css` 与成长导师专用的 `public/mentor.css`，设计原则记录于 `DESIGN.md`。旧版预览入口 `/design-preview.html` 会跳转到当前网站。
 
@@ -16,6 +16,7 @@
 - D1：账号、院系、流程、材料、质检结果、通知和院系表格目录。迁移中的流程种子数据由原项目 flow_data.py 生成。
 - 私有 R2：学生提交的 DOCX 与辅导员上传的表格；下载均经过登录及院系权限检查。
 - 定时任务：每天北京时间 09:00 生成临近截止通知。
+- 超级牛逼的办公助理：以“辅导员”或“超级管理员”身份登陆时，用户几乎不需要手动操作后台网站，可以通过唤起“办公助理”解决网站内的一切问题，为防止token滥用，功能暂时不向学生用户开放。
 - 成长导师：四份知识文件在构建时切成 25 个可检索片段；当前登录学生的档案与材料状态按需从 D1 实时组成专属检索片段。配置 DeepSeek Secret 后启用带来源的 AI 回答和 DOCX/PDF 文字检查。当前不使用原包中的密钥。
 - 资料下载：按五个培养阶段展示 21 份中国民航大学党委组织部公开附件的原始下载链接；管理员可上传全校通用表格，辅导员可上传本院系表格。公开附件可能早于现行要求，使用前须由辅导员核对。
 
