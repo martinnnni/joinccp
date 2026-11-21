@@ -4,7 +4,7 @@ import { extractReviewText } from "./file-text.js";
 import { extractRosterText } from "./roster.js";
 import { deriveVerifier } from "./pbkdf2.js";
 import { fileExtension, materialAccept, maxBatchBytes, maxFileBytes, normalizedAttachment, officeAccept, uploadType } from "../upload-types.js";
-import { scanImage } from "./scan.js";
+import { decodeImage, processImage } from "./scan.js";
 
 const root = document.getElementById("app");
 const navigation = document.getElementById("navigation");
@@ -686,6 +686,62 @@ async function inspectDocx(file) {
     add("missing-signature", "文末缺少落款（署名与日期）。", "在文末补充署名与日期。");
   return results;
 }
+function showCropEditor(canvas, onConfirm) {
+  const natW = canvas.width, natH = canvas.height;
+  const maxW = Math.round(window.innerWidth * 0.92);
+  const maxH = Math.round(window.innerHeight * 0.74);
+  const scale = Math.min(1, maxW / natW, maxH / natH);
+  const dispW = Math.max(1, Math.round(natW * scale));
+  const dispH = Math.max(1, Math.round(natH * scale));
+  const dataURL = canvas.toDataURL("image/jpeg", 0.92);
+  const handles = [
+    { x: dispW * 0.08, y: dispH * 0.08 },
+    { x: dispW * 0.92, y: dispH * 0.08 },
+    { x: dispW * 0.92, y: dispH * 0.92 },
+    { x: dispW * 0.08, y: dispH * 0.92 }
+  ];
+  const stage = make("div", { className: "crop-stage", style: "width:" + dispW + "px;height:" + dispH + "px" },
+    make("img", { src: dataURL, className: "crop-image", draggable: "false" }));
+  for (const h of handles) {
+    const el = make("div", { className: "crop-handle", style: "left:" + h.x + "px;top:" + h.y + "px;touch-action:none" });
+    const move = (clientX, clientY) => {
+      const rect = stage.getBoundingClientRect();
+      h.x = Math.max(0, Math.min(dispW, clientX - rect.left));
+      h.y = Math.max(0, Math.min(dispH, clientY - rect.top));
+      el.style.left = h.x + "px";
+      el.style.top = h.y + "px";
+    };
+    const onMove = e => move(e.clientX, e.clientY);
+    const onUp = e => {
+      try { el.releasePointerCapture(e.pointerId); } catch {}
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+    };
+    el.addEventListener("pointerdown", e => {
+      try { el.setPointerCapture(e.pointerId); } catch {}
+      e.preventDefault();
+      el.addEventListener("pointermove", onMove);
+      el.addEventListener("pointerup", onUp);
+      el.addEventListener("pointercancel", onUp);
+      move(e.clientX, e.clientY);
+    });
+    stage.append(el);
+  }
+  const overlay = make("div", { className: "scan-overlay" },
+    make("div", { className: "scan-overlay-card crop-card" },
+      make("div", { className: "panel-head" }, make("h2", { text: "拖动四角框住纸张" }), make("span", { className: "small", text: "把四个角拖到纸张边缘，再确认裁剪" })),
+      stage,
+      make("div", { className: "upload-actions" },
+        button("重拍", () => overlay.remove(), "secondary"),
+        button("确认裁剪", () => {
+          const corners = handles.map(h => ({ x: h.x / dispW * natW, y: h.y / dispH * natH }));
+          overlay.remove();
+          onConfirm(corners);
+        }))));
+  document.body.append(overlay);
+}
+
 function showScanPreview(data, onConfirm) {
   let mode = "gray";
   const img = make("img", { src: data.gray.dataURL, alt: "扫描预览", className: "scan-preview" });
@@ -728,12 +784,17 @@ function checkPage() {
       if (!file) return;
       const release = busy(form);
       try {
-        const result = await scanImage(file);
-        showScanPreview(result, blob => {
-          const dt = new DataTransfer();
-          dt.items.add(new File([blob], result.name, { type: "image/jpeg" }));
-          form.elements.file.files = dt.files;
-          feedback(form, "已使用扫描件，点击「检查并提交」上传。", "success");
+        const canvas = await decodeImage(file);
+        showCropEditor(canvas, async corners => {
+          try {
+            const result = await processImage(canvas, corners);
+            showScanPreview(result, blob => {
+              const dt = new DataTransfer();
+              dt.items.add(new File([blob], result.name, { type: "image/jpeg" }));
+              form.elements.file.files = dt.files;
+              feedback(form, "已使用扫描件，点击「检查并提交」上传。", "success");
+            });
+          } catch (error) { feedback(form, error.message); }
         });
       } catch (error) { feedback(form, error.message); }
       finally { release(); }

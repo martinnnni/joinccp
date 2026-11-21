@@ -345,22 +345,29 @@ function grayToCanvas(pixels, w, h) {
 
 const oddClamp = (v, lo, hi) => { let x = Math.max(lo, Math.min(hi, v | 0)); if ((x & 1) === 0) x++; return x; };
 
-export async function scanImage(file, { maxDim = 1200 } = {}) {
+// 解码照片为 canvas（下采样到 maxDim，供裁剪显示与处理）
+export async function decodeImage(file, maxDim = 1600) {
   const full = await decodeToCanvas(file);
   const scale = Math.min(1, maxDim / Math.max(full.width, full.height));
+  if (scale >= 1) return full;
   const w = Math.max(1, Math.round(full.width * scale));
   const h = Math.max(1, Math.round(full.height * scale));
   const c = document.createElement("canvas");
   c.width = w; c.height = h;
-  const ctx = c.getContext("2d", { willReadFrequently: true });
-  ctx.drawImage(full, 0, 0, w, h);
+  c.getContext("2d").drawImage(full, 0, 0, w, h);
+  return c;
+}
+
+// 由用户裁剪的四角（顺时针 TL/TR/BR/BL，像素坐标）做透视摆正 + 增强，
+// 返回灰度增强与黑白两档的结果。corners 传 null 则整幅处理。
+export async function processImage(canvas, corners) {
+  const w = canvas.width, h = canvas.height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
   const img = ctx.getImageData(0, 0, w, h);
   const gray = grayscale(img);
 
-  // 1) 找角 + 透视摆正（失败则整幅兜底，绝不强行 warp）
   let regionGray, regionW, regionH;
-  const corners = findDocumentCorners(gray, w, h);
-  if (corners) {
+  if (corners && corners.length === 4 && corners.every(c => c && isFinite(c.x) && isFinite(c.y))) {
     const wTop = Math.hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y);
     const wBot = Math.hypot(corners[2].x - corners[3].x, corners[2].y - corners[3].y);
     const hL = Math.hypot(corners[3].x - corners[0].x, corners[3].y - corners[0].y);
@@ -372,7 +379,7 @@ export async function scanImage(file, { maxDim = 1200 } = {}) {
     regionGray = gray; regionW = w; regionH = h;
   }
 
-  // 2) 光照展平 → 消除阴影，再增强
+  // 光照展平 → 消除阴影，再增强
   const radius = Math.max(8, Math.round(Math.min(regionW, regionH) / 12));
   const flat = illuminationFlatten(regionGray, regionW, regionH, radius);
   const grayEnhanced = autoContrast(flat, regionW, regionH);
