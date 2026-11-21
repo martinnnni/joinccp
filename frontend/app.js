@@ -686,14 +686,22 @@ async function inspectDocx(file) {
     add("missing-signature", "文末缺少落款（署名与日期）。", "在文末补充署名与日期。");
   return results;
 }
-function showScanPreview(dataURL, onConfirm) {
+function showScanPreview(data, onConfirm) {
+  let mode = "gray";
+  const img = make("img", { src: data.gray.dataURL, alt: "扫描预览", className: "scan-preview" });
+  const toggle = button("切换黑白", () => {
+    mode = mode === "gray" ? "bw" : "gray";
+    img.src = data[mode].dataURL;
+    toggle.textContent = mode === "gray" ? "切换黑白" : "切换灰度增强";
+  }, "secondary");
   const overlay = make("div", { className: "scan-overlay" },
     make("div", { className: "scan-overlay-card" },
-      make("div", { className: "panel-head" }, make("h2", { text: "扫描效果预览" }), make("span", { className: "small", text: "确认无误后作为材料上传" })),
-      make("img", { src: dataURL, alt: "扫描预览", className: "scan-preview" }),
+      make("div", { className: "panel-head" }, make("h2", { text: "扫描效果预览" }), make("span", { className: "small", text: "默认灰度增强，可切换黑白" })),
+      img,
       make("div", { className: "upload-actions" },
+        toggle,
         button("重拍", () => overlay.remove(), "secondary"),
-        button("确认上传", () => { overlay.remove(); onConfirm(); }))));
+        button("确认上传", () => { overlay.remove(); onConfirm(data[mode].blob); }))));
   document.body.append(overlay);
   overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
 }
@@ -721,10 +729,9 @@ function checkPage() {
       const release = busy(form);
       try {
         const result = await scanImage(file);
-        const scanned = new File([result.blob], result.name, { type: "image/jpeg" });
-        showScanPreview(result.dataURL, () => {
+        showScanPreview(result, blob => {
           const dt = new DataTransfer();
-          dt.items.add(scanned);
+          dt.items.add(new File([blob], result.name, { type: "image/jpeg" }));
           form.elements.file.files = dt.files;
           feedback(form, "已使用扫描件，点击「检查并提交」上传。", "success");
         });

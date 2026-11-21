@@ -10,19 +10,22 @@ export function grayscale(img) {
   return out;
 }
 
+// 积分图均值滤波（O(n)，任意大半径都快）
 export function boxBlur(src, w, h, radius = 1) {
   const r = Math.max(1, radius | 0);
-  const tmp = new Uint8Array(src.length);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    let s = 0, n = 0;
-    for (let dx = -r; dx <= r; dx++) { const xx = x + dx; if (xx >= 0 && xx < w) { s += src[y * w + xx]; n++; } }
-    tmp[y * w + x] = (s / n) | 0;
-  }
-  const out = new Uint8Array(src.length);
-  for (let x = 0; x < w; x++) for (let y = 0; y < h; y++) {
-    let s = 0, n = 0;
-    for (let dy = -r; dy <= r; dy++) { const yy = y + dy; if (yy >= 0 && yy < h) { s += tmp[yy * w + x]; n++; } }
-    out[y * w + x] = (s / n) | 0;
+  const S = w + 1;
+  const integral = new Uint32Array(S * (h + 1));
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++)
+    integral[(y + 1) * S + x + 1] = src[y * w + x] + integral[y * S + x + 1] + integral[(y + 1) * S + x] - integral[y * S + x];
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.max(0, y - r), y1 = Math.min(h - 1, y + r);
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.max(0, x - r), x1 = Math.min(w - 1, x + r);
+      const count = (x1 - x0 + 1) * (y1 - y0 + 1);
+      const sum = integral[(y1 + 1) * S + x1 + 1] - integral[y0 * S + x1 + 1] - integral[(y1 + 1) * S + x0] + integral[y0 * S + x0];
+      out[y * w + x] = sum / count;
+    }
   }
   return out;
 }
@@ -61,7 +64,39 @@ export function otsuThreshold(values) {
   return thr;
 }
 
-// 自适应二值化（局部均值）→ 黑白扫描件
+// 光照展平：背景 = 大半径均值滤波，flat = gray - 背景 + 128，消除阴影与不均匀光照
+export function illuminationFlatten(gray, w, h, radius) {
+  const bg = boxBlur(gray, w, h, Math.max(1, radius | 0));
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const v = gray[i] - bg[i] + 128;
+    out[i] = v < 0 ? 0 : v > 255 ? 255 : v;
+  }
+  return out;
+}
+
+// Bradley 自适应阈值（积分图，mean*(1-t)），比固定 C 更稳
+export function bradleyThreshold(gray, w, h, window = 15, t = 0.15) {
+  const S = w + 1;
+  const integral = new Uint32Array(S * (h + 1));
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++)
+    integral[(y + 1) * S + x + 1] = gray[y * w + x] + integral[y * S + x + 1] + integral[(y + 1) * S + x] - integral[y * S + x];
+  const out = new Uint8Array(w * h);
+  const half = window >> 1;
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.max(0, y - half), y1 = Math.min(h - 1, y + half);
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.max(0, x - half), x1 = Math.min(w - 1, x + half);
+      const count = (x1 - x0 + 1) * (y1 - y0 + 1);
+      const sum = integral[(y1 + 1) * S + x1 + 1] - integral[y0 * S + x1 + 1] - integral[(y1 + 1) * S + x0] + integral[y0 * S + x0];
+      const mean = sum / count;
+      out[y * w + x] = gray[y * w + x] < mean * (1 - t) ? 0 : 255;
+    }
+  }
+  return out;
+}
+
+// 自适应二值化（局部均值 - C），保留供兼容/测试
 export function adaptiveThreshold(gray, w, h, block = 31, C = 10) {
   const S = w + 1;
   const integral = new Uint32Array(S * (h + 1));
@@ -150,80 +185,105 @@ export function warpPerspective(src, corners, dstW, dstH) {
   return out;
 }
 
-// 找纸张四角：Otsu 二值化 → 最大连通域 → 四边最小二乘拟合 → 交点。
-// 返回顺时针 [{x,y}×4]，或 null（失败则调用方走 contentBBox 回退）。
-export function findDocumentCorners(gray, w, h) {
-  const thr = otsuThreshold(gray);
-  const bin = new Uint8Array(w * h);
-  for (let i = 0; i < w * h; i++) bin[i] = gray[i] > thr ? 1 : 0;
-  let white = 0;
-  for (let i = 0; i < w * h; i++) white += bin[i];
-  if (white > w * h * 0.7) for (let i = 0; i < w * h; i++) bin[i] = bin[i] ? 0 : 1; // 纸张偏暗则反转
-  // 最大连通域（BFS 于下采样图上，规模可控）
-  const label = new Int32Array(w * h).fill(-1);
-  const q = new Int32Array(w * h);
-  let best = { count: 0, id: 0 };
-  let nextId = 0;
-  for (let s = 0; s < w * h; s++) {
-    if (bin[s] !== 1 || label[s] !== -1) continue;
-    const id = nextId++;
-    let head = 0, tail = 0, count = 0;
-    q[tail++] = s; label[s] = id;
-    while (head < tail) {
-      const c = q[head++]; count++;
-      const x = c % w, y = (c / w) | 0;
-      if (x > 0 && bin[c - 1] === 1 && label[c - 1] === -1) { label[c - 1] = id; q[tail++] = c - 1; }
-      if (x < w - 1 && bin[c + 1] === 1 && label[c + 1] === -1) { label[c + 1] = id; q[tail++] = c + 1; }
-      if (y > 0 && bin[c - w] === 1 && label[c - w] === -1) { label[c - w] = id; q[tail++] = c - w; }
-      if (y < h - 1 && bin[c + w] === 1 && label[c + w] === -1) { label[c + w] = id; q[tail++] = c + w; }
+// ---- 边缘 + Hough 直线检测找文档四角 ----
+
+function houghLines(mag, w, h, maxLines = 16) {
+  const thr = Math.max(20, otsuThreshold(mag));
+  const diag = Math.hypot(w, h);
+  const nTheta = 180, nRho = Math.ceil(diag * 2);
+  const acc = new Int32Array(nTheta * nRho);
+  const cosT = new Float64Array(nTheta), sinT = new Float64Array(nTheta);
+  for (let t = 0; t < nTheta; t++) { const a = t * Math.PI / 180; cosT[t] = Math.cos(a); sinT[t] = Math.sin(a); }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (mag[y * w + x] < thr) continue;
+    for (let t = 0; t < nTheta; t++) {
+      const rho = Math.round(x * cosT[t] + y * sinT[t] + diag);
+      acc[t * nRho + rho]++;
     }
-    if (count > best.count) best = { count, id };
   }
-  if (best.count < w * h * 0.05) return null;
-  // 四边点集：每行的最左/最右、每列的最上/最下
-  const leftPts = [], rightPts = [], topPts = [], botPts = [];
-  for (let y = 0; y < h; y++) {
-    let L = -1, R = -1;
-    for (let x = 0; x < w; x++) if (label[y * w + x] === best.id) { L = x; break; }
-    for (let x = w - 1; x >= 0; x--) if (label[y * w + x] === best.id) { R = x; break; }
-    if (L >= 0) { leftPts.push([L, y]); rightPts.push([R, y]); }
+  const peaks = [];
+  for (let t = 0; t < nTheta; t++) for (let r = 1; r < nRho - 1; r++) {
+    const v = acc[t * nRho + r];
+    if (v < 30) continue;
+    if (v >= acc[t * nRho + r - 1] && v >= acc[t * nRho + r + 1] &&
+        v >= acc[((t + 1) % nTheta) * nRho + r] && v >= acc[((t - 1 + nTheta) % nTheta) * nRho + r])
+      peaks.push({ theta: t, rho: r - diag, score: v });
   }
-  for (let x = 0; x < w; x++) {
-    let T = -1, B = -1;
-    for (let y = 0; y < h; y++) if (label[y * w + x] === best.id) { T = y; break; }
-    for (let y = h - 1; y >= 0; y--) if (label[y * w + x] === best.id) { B = y; break; }
-    if (T >= 0) { topPts.push([x, T]); botPts.push([x, B]); }
+  peaks.sort((a, b) => b.score - a.score);
+  return peaks.slice(0, maxLines);
+}
+
+const angleDiff = (a, b) => {
+  let d = Math.abs(a - b) % 180;
+  if (d > 90) d = 180 - d;
+  return d;
+};
+
+function lineIntersection(l1, l2) {
+  const a1 = Math.cos(l1.theta * Math.PI / 180), b1 = Math.sin(l1.theta * Math.PI / 180);
+  const a2 = Math.cos(l2.theta * Math.PI / 180), b2 = Math.sin(l2.theta * Math.PI / 180);
+  const det = a1 * b2 - a2 * b1;
+  if (Math.abs(det) < 1e-6) return null;
+  return { x: (l1.rho * b2 - l2.rho * b1) / det, y: (a1 * l2.rho - a2 * l1.rho) / det };
+}
+
+function orderCorners(pts) {
+  let tl = pts[0], tr = pts[0], br = pts[0], bl = pts[0];
+  for (const p of pts) {
+    if (p.x + p.y < tl.x + tl.y) tl = p;
+    if (p.x + p.y > br.x + br.y) br = p;
+    if (p.y - p.x < tr.y - tr.x) tr = p;
+    if (p.y - p.x > bl.y - bl.x) bl = p;
   }
-  // 竖边用 x = m y + b 拟合（x 随 y），横边用 y = m x + b 拟合
-  const fitX = pts => { // 竖边：x = m y + b  ->  x - m y = b
-    const n = pts.length;
-    let sy = 0, sx = 0, syy = 0, sxy = 0;
-    for (const [x, y] of pts) { sy += y; sx += x; syy += y * y; sxy += x * y; }
-    const den = n * syy - sy * sy;
-    if (Math.abs(den) < 1e-9) return { a: 1, b: 0, c: sx / n };
-    const m = (n * sxy - sx * sy) / den;
-    const b = (sx - m * sy) / n;
-    return { a: 1, b: -m, c: b };
+  return [tl, tr, br, bl];
+}
+
+// 找纸张四角：边缘 → Hough 直线 → 聚类成两组垂直线 → 交点 → 凸四边形校验。
+// 返回顺时针 [{x,y}×4]，或 null（失败则调用方走整幅兜底）。
+export function findDocumentCorners(gray, w, h) {
+  const mag = sobelMagnitude(gray, w, h);
+  const peaks = houghLines(mag, w, h);
+  if (peaks.length < 4) return null;
+  // 归一化：rho >= 0，theta ∈ [0, 360)，保证法线方向唯一
+  const lines = peaks.map(p => {
+    let t = p.theta, r = p.rho;
+    if (r < 0) { t = (t + 180) % 360; r = -r; }
+    return { theta: t, rho: r };
+  });
+  const base = lines[0].theta;
+  const groupA = [], groupB = [];
+  for (const l of lines) (angleDiff(l.theta, base) < 45 ? groupA : groupB).push(l);
+  const extremes = group => {
+    if (group.length < 2) return null;
+    group.sort((a, b) => a.rho - b.rho);
+    // 合并同一物理线（rho 接近的重复检测），再取最外两条
+    const merged = [];
+    for (const l of group) {
+      const last = merged[merged.length - 1];
+      if (last && Math.abs(l.rho - last.rho) < 8) last.rho = (last.rho + l.rho) / 2;
+      else merged.push({ theta: l.theta, rho: l.rho });
+    }
+    if (merged.length < 2) return null;
+    return [merged[0], merged[merged.length - 1]];
   };
-  const fitY = pts => { // 横边：y = m x + b  ->  -m x + y = b
-    const n = pts.length;
-    let sx = 0, sy = 0, sxx = 0, sxy = 0;
-    for (const [x, y] of pts) { sx += x; sy += y; sxx += x * x; sxy += x * y; }
-    const den = n * sxx - sx * sx;
-    if (Math.abs(den) < 1e-9) return { a: 0, b: 1, c: sy / n };
-    const m = (n * sxy - sx * sy) / den;
-    const b = (sy - m * sx) / n;
-    return { a: -m, b: 1, c: b };
-  };
-  const L = fitX(leftPts), R = fitX(rightPts), T = fitY(topPts), B = fitY(botPts);
-  const isect = (l1, l2) => {
-    const d = l1.a * l2.b - l2.a * l1.b;
-    if (Math.abs(d) < 1e-9) return null;
-    return { x: (l1.c * l2.b - l2.c * l1.b) / d, y: (l1.a * l2.c - l2.a * l1.c) / d };
-  };
-  const TL = isect(T, L), TR = isect(T, R), BR = isect(B, R), BL = isect(B, L);
-  const corners = [TL, TR, BR, BL];
-  if (corners.some(c => !c || !isFinite(c.x) || !isFinite(c.y) || c.x < -w * 0.2 || c.x > w * 1.2 || c.y < -h * 0.2 || c.y > h * 1.2)) return null;
+  const A = extremes(groupA), B = extremes(groupB);
+  if (!A || !B) return null;
+  const pts = [];
+  for (const l1 of A) for (const l2 of B) {
+    const p = lineIntersection(l1, l2);
+    if (p && isFinite(p.x) && isFinite(p.y)) pts.push(p);
+  }
+  if (pts.length !== 4) return null;
+  const corners = orderCorners(pts);
+  // 范围校验
+  if (corners.some(c => c.x < -w * 0.25 || c.x > w * 1.25 || c.y < -h * 0.25 || c.y > h * 1.25)) return null;
+  // 凸性 + 面积校验
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const [p0, p1, p2, p3] = corners;
+  const signs = [cross(p0, p1, p2), cross(p1, p2, p3), cross(p2, p3, p0), cross(p3, p0, p1)].map(Math.sign);
+  if (signs.some(s => s === 0) || !signs.every(s => s === signs[0])) return null;
+  const area = Math.abs(cross(p0, p1, p2)) + Math.abs(cross(p0, p2, p3));
+  if (area < 0.12 * w * h || area > 0.98 * w * h) return null;
   return corners;
 }
 
@@ -269,7 +329,23 @@ function canvasToBlob(canvas, quality = 0.9) {
   return new Promise((res, rej) => canvas.toBlob(b => (b ? res(b) : rej(new Error("编码失败"))), "image/jpeg", quality));
 }
 
-export async function scanImage(file, { maxDim = 1000, bw = true } = {}) {
+function grayToCanvas(pixels, w, h) {
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const octx = c.getContext("2d");
+  const img = octx.createImageData(w, h);
+  for (let i = 0; i < w * h; i++) {
+    const v = pixels[i];
+    img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v;
+    img.data[i * 4 + 3] = 255;
+  }
+  octx.putImageData(img, 0, 0);
+  return c;
+}
+
+const oddClamp = (v, lo, hi) => { let x = Math.max(lo, Math.min(hi, v | 0)); if ((x & 1) === 0) x++; return x; };
+
+export async function scanImage(file, { maxDim = 1200 } = {}) {
   const full = await decodeToCanvas(file);
   const scale = Math.min(1, maxDim / Math.max(full.width, full.height));
   const w = Math.max(1, Math.round(full.width * scale));
@@ -281,40 +357,35 @@ export async function scanImage(file, { maxDim = 1000, bw = true } = {}) {
   const img = ctx.getImageData(0, 0, w, h);
   const gray = grayscale(img);
 
-  let warped, outW, outH;
+  // 1) 找角 + 透视摆正（失败则整幅兜底，绝不强行 warp）
+  let regionGray, regionW, regionH;
   const corners = findDocumentCorners(gray, w, h);
   if (corners) {
     const wTop = Math.hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y);
     const wBot = Math.hypot(corners[2].x - corners[3].x, corners[2].y - corners[3].y);
     const hL = Math.hypot(corners[3].x - corners[0].x, corners[3].y - corners[0].y);
     const hR = Math.hypot(corners[2].x - corners[1].x, corners[2].y - corners[1].y);
-    outW = Math.max(1, Math.round((wTop + wBot) / 2));
-    outH = Math.max(1, Math.round((hL + hR) / 2));
-    warped = warpPerspective(img, corners, outW, outH);
+    regionW = Math.max(1, Math.round((wTop + wBot) / 2));
+    regionH = Math.max(1, Math.round((hL + hR) / 2));
+    regionGray = grayscale(warpPerspective(img, corners, regionW, regionH));
   } else {
-    const box = contentBBox(gray, w, h);
-    outW = box.w; outH = box.h;
-    const oc = document.createElement("canvas"); oc.width = outW; oc.height = outH;
-    oc.getContext("2d").drawImage(c, box.x, box.y, box.w, box.h, 0, 0, outW, outH);
-    warped = oc.getContext("2d").getImageData(0, 0, outW, outH);
+    regionGray = gray; regionW = w; regionH = h;
   }
 
-  const g2 = grayscale(warped);
-  const enhanced = bw
-    ? adaptiveThreshold(autoContrast(g2, outW, outH), outW, outH)
-    : autoContrast(g2, outW, outH);
+  // 2) 光照展平 → 消除阴影，再增强
+  const radius = Math.max(8, Math.round(Math.min(regionW, regionH) / 12));
+  const flat = illuminationFlatten(regionGray, regionW, regionH, radius);
+  const grayEnhanced = autoContrast(flat, regionW, regionH);
+  const win = oddClamp(Math.round(Math.min(regionW, regionH) / 16), 15, 255);
+  const bw = bradleyThreshold(flat, regionW, regionH, win, 0.15);
 
-  const out = document.createElement("canvas");
-  out.width = outW; out.height = outH;
-  const octx = out.getContext("2d");
-  const outImg = octx.createImageData(outW, outH);
-  for (let i = 0; i < outW * outH; i++) {
-    const v = enhanced[i];
-    outImg.data[i * 4] = outImg.data[i * 4 + 1] = outImg.data[i * 4 + 2] = v;
-    outImg.data[i * 4 + 3] = 255;
-  }
-  octx.putImageData(outImg, 0, 0);
-  const blob = await canvasToBlob(out);
+  const grayCanvas = grayToCanvas(grayEnhanced, regionW, regionH);
+  const bwCanvas = grayToCanvas(bw, regionW, regionH);
   const ts = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "").slice(0, 14);
-  return { blob, width: outW, height: outH, dataURL: out.toDataURL("image/jpeg", 0.9), name: "扫描_" + ts + ".jpg" };
+  const name = "扫描_" + ts + ".jpg";
+  return {
+    width: regionW, height: regionH, name,
+    gray: { dataURL: grayCanvas.toDataURL("image/jpeg", 0.9), blob: await canvasToBlob(grayCanvas) },
+    bw: { dataURL: bwCanvas.toDataURL("image/jpeg", 0.9), blob: await canvasToBlob(bwCanvas) }
+  };
 }

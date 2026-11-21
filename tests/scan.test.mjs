@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { grayscale, adaptiveThreshold, autoContrast, warpPerspective, findDocumentCorners, contentBBox } from "../frontend/scan.js";
+import { grayscale, adaptiveThreshold, autoContrast, illuminationFlatten, bradleyThreshold, warpPerspective, findDocumentCorners, contentBBox } from "../frontend/scan.js";
 
 const solid = (w, h, rgb) => ({ width: w, height: h, data: (() => { const d = new Uint8ClampedArray(w * h * 4); for (let i = 0; i < w * h; i++) { d[i * 4] = rgb[0]; d[i * 4 + 1] = rgb[1]; d[i * 4 + 2] = rgb[2]; d[i * 4 + 3] = 255; } return d; })() });
 
@@ -51,4 +51,25 @@ test("contentBBox 裁掉四周留白", () => {
   for (let y = 3; y <= 6; y++) for (let x = 2; x <= 7; x++) g[y * w + x] = 0;
   const box = contentBBox(g, w, h);
   assert.ok(box.x <= 2 && box.y <= 3 && box.x + box.w >= 8 && box.y + box.h >= 7);
+});
+
+test("illuminationFlatten 抹平左右亮度渐变", () => {
+  // 左暗右亮的光照渐变，展平后应趋于一致
+  const w = 128, h = 32;
+  const g = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) g[y * w + x] = 100 + x; // 100..227 渐变
+  const flat = illuminationFlatten(g, w, h, 32);
+  let min = 255, max = 0;
+  for (let i = 0; i < flat.length; i++) { if (flat[i] < min) min = flat[i]; if (flat[i] > max) max = flat[i]; }
+  assert.ok(max - min < 60, "展平后整体亮度差应显著缩小，实际 " + (max - min));
+});
+
+test("bradleyThreshold 输出黑白两级且暗字变黑", () => {
+  const w = 4, h = 2;
+  // 白底(230) + 深色字(60)
+  const g = new Uint8Array([230, 230, 60, 230, 230, 60, 230, 230]);
+  const out = bradleyThreshold(g, w, h, 3, 0.15);
+  assert.ok(out.every(v => v === 0 || v === 255));
+  assert.equal(out[2], 0); // 深色像素应为黑
+  assert.equal(out[0], 255); // 白底像素应为白
 });
