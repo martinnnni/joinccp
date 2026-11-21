@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import worker, { adminRoutes } from "../worker.js";
-import { parseRosterText } from "../frontend/roster.js";
+import { parseRosterText, readStructuredStudentRoster } from "../frontend/roster.js";
 
 const pepper = "t".repeat(40);
 const counselor = { id: 8, role: "counselor", major_id: 2 };
@@ -82,4 +82,13 @@ test("初始密码登录后业务接口被锁定，改密后解除强制状态",
   }), env);
   assert.equal(change.status, 200);
   assert.ok(statements.some(item => item.sql.includes("must_change_password=0")));
+});
+
+
+test("结构化名单保留空白姓名、重复学号和源文件行号", () => {
+  const rows = readStructuredStudentRoster("名单\n班级\t姓名\t学号\n一班\t张三\t00123456\n\n一班\t\t00123456", "\t");
+  assert.deepEqual(rows, [
+    { line: 3, name: "张三", studentNo: "00123456" },
+    { line: 5, name: "", studentNo: "00123456" }
+  ]);
 });

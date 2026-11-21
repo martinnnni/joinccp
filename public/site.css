@@ -794,3 +794,18 @@ body:has(.scan-overlay-card[open]) { overflow: hidden; }
     animation-duration: .01ms !important;
   }
 }
+.action-dialog { width: min(28rem, calc(100vw - 2rem)); }
+.action-dialog h2, .review-preview h2 { margin: 0; overflow-wrap: anywhere; }
+.review-preview canvas { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.scan-ocr { width: min(100%, 38rem); }
+.scan-ocr textarea { width: 100%; min-width: 0; }
+.scan-ocr[hidden], .view [hidden] { display: none; }
+.operation-result { width: min(75rem, calc(100% - 2rem)); margin: .75rem auto 0; }
+.review-filters { margin-block-end: .75rem; }
+.submission-timeline ol { margin: .35rem 0; padding-inline-start: 1.15rem; }
+.submission-timeline li + li { margin-top: .5rem; }
+.office-roster { width: min(100%, 32rem); min-width: 0; }
+.office-roster-list { display: grid; gap: .5rem; max-height: min(22rem, 45vh); overflow-y: auto; padding: .4rem 0; }
+.office-roster-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: .35rem; border-top: 1px solid var(--line); padding: .35rem 0; }
+.office-roster-row > .small, .office-roster-row > .form-feedback { grid-column: 1 / -1; }
+.office-roster-row input { width: 100%; min-width: 0; }

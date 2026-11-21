@@ -50,6 +50,23 @@ export function parseRosterText(text) {
   return { rows, issues };
 }
 
+export function readStructuredStudentRoster(text, separator) {
+  const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+  const split = line => line.split(separator).map(value => value.trim().replace(/^"|"$/g, ""));
+  let header, nameColumn, numberColumn;
+  for (let i = 0; i < Math.min(10, lines.length); i++) {
+    const columns = split(lines[i]);
+    nameColumn = columns.findIndex(value => /^(学生)?姓名$/.test(value));
+    numberColumn = columns.findIndex(value => /^(学生)?学号$/.test(value));
+    if (nameColumn >= 0 && numberColumn >= 0) { header = i; break; }
+  }
+  if (header === undefined) return null;
+  return lines.slice(header + 1).flatMap((line, index) => {
+    const values = split(line);
+    return values.some(Boolean) ? [{ line: header + index + 2, name: values[nameColumn] || "", studentNo: values[numberColumn] || "" }] : [];
+  });
+}
+
 export async function extractRosterText(file) {
   if (!file || file.size < 1 || file.size > 10 * 1024 * 1024) throw new Error("请选择不超过 10 MB 的名单文件");
   if (/\.(docx|pdf)$/i.test(file.name)) return extractReviewText(file, 2);
@@ -75,9 +92,20 @@ export async function extractRosterText(file) {
   const shared = sharedEntry ? Array.from(parseXml(await sharedEntry.async("string")).getElementsByTagName("si"), item =>
     Array.from(item.getElementsByTagName("t"), node => node.textContent).join("")) : [];
   const doc = parseXml(await sheet.async("string"));
-  return Array.from(doc.getElementsByTagName("row"), row => Array.from(row.getElementsByTagName("c"), cell => {
-    const value = cell.getElementsByTagName("v")[0]?.textContent || "";
-    return cell.getAttribute("t") === "s" ? (shared[Number(value)] || "") :
-      cell.getAttribute("t") === "inlineStr" ? Array.from(cell.getElementsByTagName("t"), node => node.textContent).join("") : value;
-  }).join("\t")).join("\n").slice(0, 100000);
+  const lines = [];
+  for (const row of doc.getElementsByTagName("row")) {
+    const cells = [];
+    for (const cell of row.getElementsByTagName("c")) {
+      const column = cell.getAttribute("r")?.match(/^[A-Z]+/)?.[0];
+      const index = column ? [...column].reduce((value, letter) => value * 26 + letter.charCodeAt(0) - 64, 0) - 1 : cells.length;
+      if (index > 500) continue;
+      const value = cell.getElementsByTagName("v")[0]?.textContent || "";
+      cells[index] = cell.getAttribute("t") === "s" ? (shared[Number(value)] || "") :
+        cell.getAttribute("t") === "inlineStr" ? Array.from(cell.getElementsByTagName("t"), node => node.textContent).join("") : value;
+    }
+    const rowIndex = Number(row.getAttribute("r")) - 1;
+    if (rowIndex > 10000) throw new Error("请将名单放在 Excel 前 10000 行");
+    lines[rowIndex >= 0 ? rowIndex : lines.length] = cells.join("\t");
+  }
+  return lines.join("\n").slice(0, 100000);
 }
