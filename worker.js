@@ -271,6 +271,34 @@ async function deepSeekContent(env, payload) {
   if (typeof content !== "string" || !content.trim()) throw mentorFailure("M-106");
   return content.trim();
 }
+function toBase64(bytes) {
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  return btoa(bin);
+}
+const IMAGE_EXTS = new Set(["jpg", "jpeg", "png", "webp", "gif"]);
+async function verifyMaterialImage(env, file, materialName) {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const b64 = toBase64(bytes);
+    const mime = file.type || "image/jpeg";
+    const raw = await deepSeekContent(env, {
+      model: "deepseek-flash",
+      messages: [{ role: "user", content: [
+        { type: "text", text: "这是一份党员发展材料。请判断这张图片里的文档是否属于《" + materialName + "》。只输出 JSON 对象：{\"isMatch\": true 或 false, \"note\": \"一句话理由\"}。" },
+        { type: "image_url", image_url: { url: "data:" + mime + ";base64," + b64 } }
+      ] }],
+      max_tokens: 300, temperature: 0
+    });
+    const isMatch = /"isMatch"\s*:\s*(true|false)/i.exec(raw);
+    const note = /"note"\s*:\s*"([^"]*)"/i.exec(raw);
+    return { isMatch: isMatch ? isMatch[1].toLowerCase() === "true" : null, note: note ? note[1] : raw.slice(0, 160) };
+  } catch (error) {
+    console.error("material verify failed", error?.message || error);
+    return { isMatch: null, note: "核对失败，已跳过。" };
+  }
+}
 async function logMentorQuestion(env, user, question, decision) {
   try {
     await env.DB.prepare("INSERT INTO mentor_question_logs(user_id,question,intent,top_similarity,outcome) VALUES(?,?,?,?,?)")
@@ -437,7 +465,7 @@ export async function checkRoutes(request, env, path, user) {
     const filename = clean(file.name, 150), type = uploadType(filename);
     assert(type && file.size > 0 && file.size <= maxFileBytes, "仅支持不超过 10 MB 的 Word、PDF 或图片");
     assert(await matchesUploadType(file, type), "文件内容与扩展名不符");
-    const material = await env.DB.prepare("SELECT id FROM materials WHERE id=?").bind(materialId).first();
+    const material = await env.DB.prepare("SELECT id,name FROM materials WHERE id=?").bind(materialId).first();
     assert(material, "材料类型不存在", 404);
     let results;
     try { results = validateResults(JSON.parse(String(form.get("results") || "[]"))); }
@@ -469,7 +497,11 @@ export async function checkRoutes(request, env, path, user) {
         ]);
         await Promise.allSettled(previous.results.map(item => env.FILES.delete(item.r2_key)));
       }
-      return json({ ok: true, id: checkId, results }, 201);
+      let verify = null;
+      if (IMAGE_EXTS.has(type.ext) && file.size <= 4 * 1024 * 1024 && env.DEEPSEEK_API_KEY) {
+        verify = await verifyMaterialImage(env, file, material.name);
+      }
+      return json({ ok: true, id: checkId, results, verify }, 201);
     } catch (error) {
       if (checkId) await env.DB.prepare("DELETE FROM checks WHERE id=?").bind(checkId).run();
       await env.FILES.delete(key);

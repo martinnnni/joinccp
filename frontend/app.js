@@ -704,28 +704,25 @@ function showCropEditor(canvas, onConfirm) {
     make("img", { src: dataURL, className: "crop-image", draggable: "false" }));
   for (const h of handles) {
     const el = make("div", { className: "crop-handle", style: "left:" + h.x + "px;top:" + h.y + "px;touch-action:none" });
-    const move = (clientX, clientY) => {
+    let active = false;
+    const moveTo = (cx, cy) => {
       const rect = stage.getBoundingClientRect();
-      h.x = Math.max(0, Math.min(dispW, clientX - rect.left));
-      h.y = Math.max(0, Math.min(dispH, clientY - rect.top));
+      h.x = Math.max(0, Math.min(dispW, cx - rect.left));
+      h.y = Math.max(0, Math.min(dispH, cy - rect.top));
       el.style.left = h.x + "px";
       el.style.top = h.y + "px";
     };
-    const onMove = e => move(e.clientX, e.clientY);
-    const onUp = e => {
-      try { el.releasePointerCapture(e.pointerId); } catch {}
-      el.removeEventListener("pointermove", onMove);
-      el.removeEventListener("pointerup", onUp);
-      el.removeEventListener("pointercancel", onUp);
-    };
-    el.addEventListener("pointerdown", e => {
-      try { el.setPointerCapture(e.pointerId); } catch {}
-      e.preventDefault();
-      el.addEventListener("pointermove", onMove);
-      el.addEventListener("pointerup", onUp);
-      el.addEventListener("pointercancel", onUp);
-      move(e.clientX, e.clientY);
-    });
+    const begin = (cx, cy) => { active = true; moveTo(cx, cy); };
+    const end = () => { active = false; };
+    // 触摸（手机/微信）
+    el.addEventListener("touchstart", e => { e.preventDefault(); begin(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+    el.addEventListener("touchmove", e => { if (active) { e.preventDefault(); moveTo(e.touches[0].clientX, e.touches[0].clientY); } }, { passive: false });
+    el.addEventListener("touchend", end);
+    el.addEventListener("touchcancel", end);
+    // 鼠标（桌面兜底）
+    const onMove = e => { if (active) moveTo(e.clientX, e.clientY); };
+    const onUp = () => { end(); document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); };
+    el.addEventListener("mousedown", e => { e.preventDefault(); begin(e.clientX, e.clientY); document.addEventListener("mousemove", onMove); document.addEventListener("mouseup", onUp); });
     stage.append(el);
   }
   const overlay = make("div", { className: "scan-overlay" },
@@ -814,10 +811,16 @@ function checkPage() {
         data.set("file", file);
         data.set("results", JSON.stringify(results));
         const saved = await api("/api/checks", { method: "POST", body: data });
+        const verifyNote = saved.verify ? notice(
+          saved.verify.isMatch === true ? "系统核对：这看起来是所选材料。"
+            : saved.verify.isMatch === false ? "系统核对：这可能不是所选材料——" + saved.verify.note + "。请确认后重新提交。"
+              : "系统核对：" + saved.verify.note,
+          saved.verify.isMatch === false ? "error" : saved.verify.isMatch === true ? "success" : "info") : null;
         output.replaceChildren(make("div", { className: "panel-head" }, make("h2", { text: inspected ? "质检结果" : "提交结果" }), inspected ? make("span", { className: "small", text: results.length + " 项结果" }) : null),
           inspected ? make("div", { className: "results-list" },
             results.length ? results.map(r => make("div", { className: "result-row" }, make("strong", { text: r.message }), p(r.suggestion))) :
               [make("div", { className: "result-row" }, make("strong", { text: "未发现格式问题" }), p("已完成当前规则检查。"))]) : null,
+          verifyNote,
           notice(inspected ? "文件已提交，DOCX 格式检查已完成。" : "文件已提交，等待人工审阅。", "success"),
           make("a", { className: "text-link", href: "/api/checks/" + saved.id + "/file", text: "下载已保存的材料 →" }));
       } catch (error) { feedback(form, error.message); }

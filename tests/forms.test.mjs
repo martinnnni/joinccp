@@ -108,3 +108,35 @@ test("学生提交 DOCX 后材料状态写为已交", async () => {
   assert.equal(uploaded, true);
   assert.equal(savedRecord, true);
 });
+
+test("图片提交后调用 DeepSeek 视觉核对是否对应材料", async () => {
+  const previousFetch = globalThis.fetch;
+  let sentPayload = null;
+  globalThis.fetch = async (_url, options) => {
+    sentPayload = JSON.parse(options.body);
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"isMatch":true,"note":"是申请书"}' } }] }), { status: 200 });
+  };
+  const env = {
+    DEEPSEEK_API_KEY: "test",
+    DB: { prepare(sql) { return {
+      sql, params: [], bind(...params) { this.params = params; return this; },
+      async first() { return { id: 4, name: "入党申请书" }; },
+      async all() { return { results: [] }; },
+      async run() { return { meta: { last_row_id: 12 } }; }
+    }; }, async batch() {} },
+    FILES: { async put() {}, async delete() {} }
+  };
+  try {
+    const form = new FormData();
+    form.set("materialId", "4");
+    form.set("docx", new File([new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46])], "photo.jpg", { type: "image/jpeg" }));
+    form.set("results", "[]");
+    const req = new Request("https://example.test/api/checks", { method: "POST", body: form });
+    const res = await checkRoutes(req, env, "/api/checks", student);
+    const data = await res.json();
+    assert.equal(res.status, 201);
+    assert.equal(data.verify.isMatch, true);
+    assert.ok(sentPayload.messages[0].content.some(p => p.type === "image_url"));
+    assert.match(sentPayload.messages[0].content[0].text, /入党申请书/);
+  } finally { globalThis.fetch = previousFetch; }
+});
