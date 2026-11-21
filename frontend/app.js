@@ -1,7 +1,7 @@
 import JSZip from "jszip";
 import officialForms from "../official-forms.json";
 import { extractReviewText } from "./file-text.js";
-import { extractRosterText } from "./roster.js";
+import { extractRosterText, readStructuredStudentRoster } from "./roster.js";
 import { deriveVerifier } from "./pbkdf2.js";
 import { fileExtension, materialAccept, maxBatchBytes, maxFileBytes, normalizedAttachment, officeAccept, uploadType } from "../upload-types.js";
 import { decodeImage, processImage, rotateScan, validCrop } from "./scan.js";
@@ -141,6 +141,53 @@ function feedback(container, message, kind = "error") {
   status.dataset.kind = kind;
   status.textContent = message;
 }
+let operationFeedback = "";
+function refreshWithFeedback(message) {
+  operationFeedback = message;
+  render();
+}
+function actionDialog(title, message, label = "确认") {
+  return new Promise(resolve => {
+    const dialog = make("dialog", { className: "scan-overlay-card action-dialog", "aria-label": title },
+      make("h2", { text: title }), p(message));
+    const cancel = button("取消", () => dialog.close(), "secondary");
+    dialog.append(make("div", { className: "upload-actions" }, cancel, button(label, () => dialog.close("confirmed"))));
+    dialog.addEventListener("close", () => {
+      const accepted = dialog.returnValue === "confirmed";
+      recordActivity(accepted ? "dialog_confirm" : "dialog_cancel");
+      dialog.remove();
+      resolve(accepted);
+    }, { once: true });
+    document.body.append(dialog);
+    dialog.showModal();
+    cancel.focus();
+  });
+}
+function uploadWithProgress(path, body, status) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", path);
+    request.timeout = 120000;
+    request.upload.onprogress = event => {
+      status.textContent = event.lengthComputable ? "已上传 " + Math.round(event.loaded / event.total * 100) + "%" : "正在上传…";
+    };
+    request.upload.onload = () => { status.textContent = "上传完成，正在保存…"; };
+    request.onload = () => {
+      let result;
+      try { result = JSON.parse(request.responseText); } catch {}
+      if (request.status >= 200 && request.status < 300 && result?.ok) resolve(result);
+      else reject(new Error(result?.error || "保存失败，请重试"));
+    };
+    request.onerror = request.ontimeout = request.onabort = () => reject(new Error("连接中断，请重试"));
+    status.textContent = "正在上传…";
+    request.send(body);
+  });
+}
+function displayTime(value) {
+  if (!value) return "";
+  const date = new Date(value.includes("T") ? value : value.replace(" ", "T") + "Z");
+  return Number.isNaN(+date) ? value : date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
+}
 function formData(form) { return Object.fromEntries(new FormData(form)); }
 function randomHex(size) {
   return Array.from(crypto.getRandomValues(new Uint8Array(size)), n => n.toString(16).padStart(2, "0")).join("");
@@ -148,6 +195,10 @@ function randomHex(size) {
 async function derive(password, salt, iterations = 210000) {
   return deriveVerifier(password, salt, iterations);
 }
+function recordActivity(event) {
+  if (me && !me.must_change_password) post("/api/activity", { event }).catch(() => {});
+}
+let lastVisitedPage;
 function navigate(page) { location.hash = page; render(); }
 function nav() {
   navigation.replaceChildren();
@@ -170,6 +221,10 @@ function nav() {
       make("summary", { text: "个人资料", "aria-label": "个人资料菜单" }),
       make("div", { className: "nav-profile-menu" },
         make("div", { className: "nav-profile-name", text: me.name || me.username }),
+        ...(isStaffUser() && !me.must_change_password ? [
+          make("a", { href: "#operations", text: "操作记录" }),
+          make("a", { href: "#recycle", text: "回收站" })
+        ] : []),
         make("a", { href: "#password", text: "修改密码" }),
         button("登出", logout, "linklike")));
     navigation.append(profileMenu);
@@ -189,6 +244,11 @@ function render() {
   nav();
   const page = location.hash.slice(1) || (me ? me.role === "student" ? "profile" : "admin" : config?.initialized ? "login" : "bootstrap");
   document.body.dataset.page = page;
+  if (!me) lastVisitedPage = null;
+  else if (lastVisitedPage !== page) {
+    lastVisitedPage = page;
+    if (["profile", "check", "checks", "forms", "notifications", "admin", "operations", "recycle", "password"].includes(page)) recordActivity("view_" + page);
+  }
   if (!me) root.replaceChildren(page === "register" ? registration() : page === "bootstrap" && !config?.initialized ? bootstrap() : login());
   else if (me.must_change_password) root.replaceChildren(passwordPage());
   else if (page === "password") root.replaceChildren(passwordPage());
@@ -196,7 +256,11 @@ function render() {
   else if (page === "checks" && me.role === "student" && me.is_monitor) root.replaceChildren(checksPage(true));
   else if (me.role === "student") root.replaceChildren(
     page === "check" ? checkPage() : page === "mentor" ? mentorPage() : page === "notifications" ? notificationsPage() : profilePage());
-  else root.replaceChildren(page === "checks" ? checksPage() : adminPage());
+  else root.replaceChildren(page === "checks" ? checksPage() : ["operations", "recycle"].includes(page) ? recordsPage(page) : adminPage());
+  if (operationFeedback) {
+    root.prepend(make("p", { className: "form-feedback operation-result", role: "status", "data-kind": "success", text: operationFeedback }));
+    operationFeedback = "";
+  }
 }
 function accountForm(title, includeInvite = false, includeBootstrap = false) {
   const registrationFields = includeInvite ? make("div", { className: "form-grid" },
@@ -291,6 +355,59 @@ function passwordPage() {
     panel(make("div", { className: "panel-head" }, make("h2", { text: "账号安全" })), form));
 }
 
+function recordsPage(page) {
+  const recycle = page === "recycle";
+  const title = recycle ? "回收站" : "操作记录";
+  const description = recycle ? "恢复已移除的账号及其档案。" : "查询访问、提交及后台操作，时间使用北京时间。";
+  const body = make("div");
+  const rows = make("tbody");
+  const columns = recycle ? ["账号", "角色", "班级", "移除时间", "操作"] : ["时间", "操作者", "操作", "HTTP 状态", "对象编号"];
+  const table = tableWrap(make("table", { className: "data" }, make("thead", {}, make("tr", {}, columns.map(text => make("th", { text })))), rows));
+  let cursor = "";
+  const more = button("加载更多", load, "secondary");
+  async function load() {
+    const release = busy(body);
+    try {
+      const data = await api("/api/admin/" + (recycle ? "recycle" : "operation-logs" + (cursor ? "?before=" + cursor : "")));
+      const items = recycle ? data.accounts : data.logs;
+      if (!cursor) rows.replaceChildren();
+      for (const item of items) {
+        const cells = recycle ? [
+          [item.name, item.username].filter(Boolean).join(" · "), item.role === "student" ? "学生" : "辅导员", item.class_name || "—", displayTime(item.deleted_at),
+          button("恢复", async () => {
+            if (!await actionDialog("恢复账号", "恢复后，" + (item.name || item.username) + "可以重新登录。", "恢复")) return;
+            try { await post("/api/admin/recycle/restore", { userId: item.id }); await load(); feedback(body, "账号已恢复", "success"); }
+            catch (error) { feedback(body, error.message); }
+          }, "secondary")
+        ] : [
+          displayTime(item.occurred_at), item.actor_name || item.actor_role || "访客",
+          ({
+            archive_student: "学生移入回收站", archive_counselor: "辅导员移入回收站", restore_account: "恢复账号",
+            view_profile: "查看培养档案", view_check: "打开材料提交", view_checks: "查看审阅队列",
+            view_forms: "打开资料下载", view_notifications: "查看通知", view_admin: "打开工作台",
+            view_operations: "查看操作记录", view_recycle: "打开回收站", view_password: "打开密码设置",
+            open_mentor: "打开助理", scan_crop: "生成扫描预览", scan_rotate: "旋转扫描页",
+            scan_mode: "调整扫描效果", scan_use: "采用扫描件", scan_ocr: "发起本机文字识别",
+            roster_edit: "修改名单行", roster_remove: "移除名单行", preview_submission: "预览提交材料",
+            dialog_confirm: "确认操作", dialog_cancel: "取消操作", download_official_form: "下载公开表格",
+            daily_reminders: "执行定时提醒"
+          })[item.action] || item.method + " " + item.action,
+          String(item.status), item.targets || "—"
+        ];
+        rows.append(make("tr", {}, cells.map(value => make("td", {}, value))));
+      }
+      cursor = data.next;
+      more.hidden = !cursor;
+      if (!items.length && !rows.children.length) rows.append(make("tr", {}, make("td", { colspan: columns.length, text: "暂无记录" })));
+    } catch (error) { feedback(body, error.message); }
+    finally { release(); }
+  }
+  more.hidden = true;
+  body.append(table, more);
+  load();
+  return make("div", { className: "view" }, pageHead("STAFF", title, description), panel(body));
+}
+
 function profilePage() {
   const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", "我的档案", "查看当前培养阶段、下一步节点和材料完成情况。"), notice("正在读取档案…"));
   (async () => { try {
@@ -298,7 +415,10 @@ function profilePage() {
     const profile = data.profile;
     const stageOrder = ["application", "activist", "development-target", "probationary-acceptance", "probationary-regularization"];
     const stageNumber = Math.max(1, stageOrder.indexOf(profile.current_stage_slug) + 1);
-    const done = data.materials.filter(x => x.status === "已交" || x.status === "已通过").length;
+    const materialState = x => x.review_status === "退回修改" ? "退回修改" :
+      x.review_status === "已通过" || x.status === "已通过" ? "已通过" :
+      x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待班长初审" : x.status || "未提交";
+    const done = data.materials.filter(x => materialState(x) === "已通过").length;
     const total = data.materials.length;
     const completion = total ? Math.round(done * 100 / total) : 0;
     const summary = panel(
@@ -311,14 +431,24 @@ function profilePage() {
     const stats = make("div", { className: "metric-grid" },
       metric("当前阶段", data.stage?.name || "未开始", "培养进度", true),
       metric("当前节点", data.node?.name || "未设置", data.node?.duration_rule || "按计划推进"),
-      metric("材料完成", done + " / " + total, "本阶段材料已完成 " + completion + "%"));
+      metric("材料完成", done + " / " + total, "本阶段材料已通过 " + completion + "%"));
     const table = make("table", { className: "data" },
       make("thead", {}, make("tr", {}, ["材料名称", "类别", "填写方式", "状态"].map(x => make("th", { text: x })))),
       make("tbody", {}, data.materials.map(item => make("tr", {},
         make("td", { text: item.name }),
         make("td", { text: ({ A: "档案材料", B: "流程表", C: "会议记录" })[item.category] || item.category }),
         make("td", { text: ({ red: "个人填写", blue: "组织审批", black: "支部填写" })[item.fill_method] || item.fill_method }),
-        make("td", {}, make("span", { className: "badge " + (item.status === "已交" || item.status === "已通过" ? "done" : "missing"), text: item.status || "未交" }))))));
+        make("td", {}, make("span", { className: "badge " + (materialState(item) === "已通过" ? "done" : "missing"), text: materialState(item) }),
+          item.checked_at ? make("div", { className: "small", text: "已提交 · " + displayTime(item.checked_at) }) : null,
+          item.reviewed_at ? make("div", { className: "small", text: "已审阅 · " + displayTime(item.reviewed_at) }) : null,
+          item.review_note ? make("div", { className: "small", text: "审阅说明：" + item.review_note }) : null,
+          item.checked_at ? make("details", { className: "submission-timeline" }, make("summary", { text: "提交历史" }),
+            make("ol", {}, (data.submissionHistory || []).filter(entry => entry.material_id === item.id).map(entry => make("li", {},
+              make("div", { className: "small", text: displayTime(entry.checked_at) + " · " + (entry.reviewed_at ? entry.review_status : "已提交") }),
+              entry.monitor_approved_at ? make("div", { className: "small", text: displayTime(entry.monitor_approved_at) + " · 班长初审通过" }) : null,
+              entry.review_note ? make("div", { className: "small", text: entry.review_note }) : null,
+              make("a", { className: "text-link small", href: "/api/checks/" + entry.id + "/file", text: "下载该版本" }))))) : null,
+          materialState(item) === "退回修改" ? make("a", { href: "#check", className: "text-link small", text: "修改后重新提交" }) : null)))));
     const materials = panel(make("div", { className: "panel-head" },
       make("h2", { text: "本阶段材料" }), make("span", { className: "small", text: "共 " + total + " 项" })),
       total ? tableWrap(table) : make("div", { className: "empty-state" }, make("strong", { text: "暂无材料" }), "此阶段尚未配置材料清单。"));
@@ -333,6 +463,70 @@ function profilePage() {
 function mentorGirl() {
   for (let i = 1; i <= 7; i++) { const img = new Image(); img.src = "/girl/frame_" + i + ".webp"; }
   return make("img", { src: "/girl/frame_0.webp", alt: "", className: "mentor-girl-img", draggable: "false" });
+}
+
+function rosterEditor(initial, alive, onDone) {
+  const draft = make("div", { className: "office-roster" });
+  const rosterForm = make("form", { className: "office-roster-form" });
+  const fields = [];
+  const list = make("div", { className: "office-roster-list" });
+  const result = make("div");
+  const classSelect = select("所属班级", "classId", [["", "请选择班级"], ...initial.classes.map(item => [item.id, item.name])], initial.classId);
+  const invalidated = () => result.replaceChildren();
+  initial.rows.forEach(row => {
+    const name = field("姓名", "name", "text", false, row.name);
+    const number = field("学号", "studentNo", "text", false, row.studentNo);
+    number.querySelector("input").inputMode = "numeric";
+    const error = make("p", { className: "form-feedback", role: "status", text: row.issues.join("；") });
+    const current = { line: row.line, name: name.querySelector("input"), number: number.querySelector("input"), error };
+    const section = make("div", { className: "office-roster-row" }, make("span", { className: "small", text: "第 " + row.line + " 行" }),
+      name, number, button("移除此行", () => {
+        recordActivity("roster_remove");
+        section.remove();
+        fields.splice(fields.indexOf(current), 1);
+        invalidated();
+      }, "linklike"), error);
+    fields.push(current);
+    list.append(section);
+  });
+  rosterForm.addEventListener("input", event => {
+    invalidated();
+    const changed = fields.find(field => field.name === event.target || field.number === event.target);
+    if (changed) changed.error.textContent = "请重新校验此行";
+  });
+  list.addEventListener("change", () => recordActivity("roster_edit"));
+  rosterForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    invalidated();
+    if (!alive()) return;
+    if (!fields.length) return feedback(rosterForm, "名单已清空，请重新上传。");
+    const release = busy(rosterForm);
+    const checkedFields = [...fields];
+    const rows = checkedFields.map(field => ({ line: field.line, name: field.name.value, studentNo: field.number.value }));
+    const classId = rosterForm.elements.classId.value;
+    try {
+      const preview = await post("/api/office/roster-preview", { rows, classId });
+      if (!alive() || !draft.isConnected || classId !== rosterForm.elements.classId.value ||
+        fields.length !== rows.length || rows.some((row, index) => fields[index] !== checkedFields[index] || fields[index].name.value !== row.name || fields[index].number.value !== row.studentNo)) return;
+      preview.roster.rows.forEach((row, index) => { fields[index].error.textContent = row.issues.join("；"); });
+      if (!preview.plan) return feedback(rosterForm, classId ? "请修正标出的行，再校验名单。" : "请选择所属班级，再校验名单。");
+      const confirm = button("确认登记", async () => {
+        confirm.disabled = true;
+        const controls = [...rosterForm.elements].filter(control => control !== confirm && !control.disabled);
+        controls.forEach(control => { control.disabled = true; });
+        try {
+          const outcome = await post("/api/office/execute", { planId: preview.plan.id });
+          if (draft.isConnected && alive()) { rosterForm.remove(); onDone(outcome.message); }
+        } catch (error) { confirm.disabled = false; feedback(rosterForm, error.message + "。可重新校验后再试。"); }
+        finally { controls.forEach(control => { control.disabled = false; }); }
+      });
+      result.append(p(preview.plan.preview), confirm);
+    } catch (error) { feedback(rosterForm, error.message); }
+    finally { release(); }
+  });
+  rosterForm.append(classSelect, list, make("button", { type: "submit", className: "secondary", text: "校验名单" }), result);
+  draft.append(rosterForm);
+  return draft;
 }
 
 function mentorPage() {
@@ -487,6 +681,7 @@ function mentorPage() {
       textarea.value = ""; textarea.blur(); resize(); playGirlTyping(); scrollEnd();
       try {
         let documentText = "";
+        let structuredRoster = null;
         const task = [...officeHistory.filter(item => item.role === "user").slice(-2).map(item => item.content), question].join("\n");
         if (files.length && !/归档|资料下载|上传.*表格/.test(question) &&
           (/名单|登记|注册|添加辅导员|删除|群发|收件人|站内信|推进|审阅|更新|修改|导入/.test(task) ||
@@ -494,21 +689,33 @@ function mentorPage() {
           for (const file of files) {
             if (!/\.(xlsx|csv|txt|docx|pdf)$/i.test(file.name)) continue;
             try {
-              documentText += "\n文件：" + file.name + "\n" + (await extractRosterText(file)).slice(0, 10000);
+              const extracted = await extractRosterText(file);
+              documentText += "\n文件：" + file.name + "\n" + extracted.slice(0, 10000);
+              if (files.length === 1 && /登记|注册|导入|添加.*学生/.test(task) && !/辅导员|删除|通知|更新/.test(question)) {
+                if (/\.xlsx$/i.test(file.name)) structuredRoster = readStructuredStudentRoster(extracted, "\t");
+                if (/\.csv$/i.test(file.name)) structuredRoster = readStructuredStudentRoster(extracted, /[,，]/);
+              }
             } catch {
               documentText += "\n未能从附件「" + file.name + "」提取文字。仍可按文件名安排归档；如需提取名单，请提供可搜索的文档或粘贴文字。";
             }
           }
         }
-        const result = await post("/api/office/plan", { question, documentText: documentText.slice(0, 25000), files: files.map(file => ({ name: file.name })), history: officeHistory.slice(-6) });
+        const result = structuredRoster?.length
+          ? { ...await post("/api/office/roster-preview", { rows: structuredRoster }), answer: "请逐行核对名单，选择班级后校验。" }
+          : await post("/api/office/plan", { question, documentText: documentText.slice(0, 25000), files: files.map(file => ({ name: file.name })), history: officeHistory.slice(-6) });
         if (!alive()) return;
         officeHistory.push({ role: "user", content: question }, { role: "assistant", content: result.answer });
         loading.remove();
         const row = appendMessage({ role: "assistant", content: result.answer + (result.plan ? "\n\n待确认操作\n" + result.plan.preview : "") });
+        if (result.roster) row.querySelector(".mentor-bubble").append(rosterEditor(result.roster, alive, message => {
+          officeHistory = [];
+          clearFile();
+          focusReplyTop(appendMessage({ role: "assistant", content: message }));
+        }));
         if (result.plan) {
           pendingOfficePlan = result.plan.id;
           const plannedFiles = files.slice();
-          const label = ["delete_students", "delete_counselors"].includes(result.plan.type) ? "确认删除" :
+          const label = ["delete_students", "delete_counselors"].includes(result.plan.type) ? "移入回收站" :
             result.plan.type === "send_notifications" ? "确认发送" : "确认执行";
           const confirm = button(label, async () => {
             if (pendingOfficePlan !== result.plan.id || confirm.disabled) return;
@@ -527,7 +734,7 @@ function mentorPage() {
                 const body = new FormData();
                 body.append("planId", result.plan.id);
                 plannedFiles.forEach(file => body.append("file", file, file.name));
-                outcome = await api("/api/office/execute", { method: "POST", body });
+                outcome = await uploadWithProgress("/api/office/execute", body, progress.querySelector(".mentor-bubble") || progress);
               } else outcome = await post("/api/office/execute", { planId: result.plan.id });
               if (!alive()) return;
               progress.remove();
@@ -612,6 +819,7 @@ function mentorPage() {
 
 let mentorPanelOpen = false;
 function openMentor() {
+  recordActivity("open_mentor");
   const panel = document.getElementById("mentorPanel");
   const body = document.getElementById("mentorPanelBody");
   const fab = document.getElementById("mentorFab");
@@ -744,7 +952,7 @@ function editScan(initialCanvas, onSelect) {
       try {
         const full = points.every((p, index) => p.x === (index === 1 || index === 2 ? 1 : 0) && p.y === (index > 1 ? 1 : 0));
         const result = await processImage(canvas, full ? null : corners());
-        if (dialog.open && confirm.isConnected) preview(result);
+        if (dialog.open && confirm.isConnected) { recordActivity("scan_crop"); preview(result); }
       } catch (error) { message.textContent = error.message; confirm.disabled = false; }
     });
     const handles = ["左上", "右上", "右下", "左下"].map((label, i) => {
@@ -789,7 +997,7 @@ function editScan(initialCanvas, onSelect) {
     }
     draw();
     content.replaceChildren(stage);
-    actions.replaceChildren(button("取消", cancel, "secondary"), button("旋转", () => { canvas = rotateScan(canvas); crop(true); }, "secondary"),
+    actions.replaceChildren(button("取消", cancel, "secondary"), button("旋转", () => { recordActivity("scan_rotate"); canvas = rotateScan(canvas); crop(true); }, "secondary"),
       button("重置四角", () => crop(true), "secondary"), confirm);
   }
 
@@ -800,7 +1008,7 @@ function editScan(initialCanvas, onSelect) {
     const selectMode = make("select", { "aria-label": "扫描效果" }, [["color", "原色"], ["gray", "灰度增强"], ["bw", "黑白"]].map(([value, text]) => make("option", { value, text })));
     const cached = { color: result.color };
     let selected = result.color;
-    const use = button("使用扫描件", () => { onSelect(new File([selected], result.name, { type: "image/jpeg" })); cancel(); });
+    const use = button("使用扫描件", () => { recordActivity("scan_use"); onSelect(new File([selected], result.name, { type: "image/jpeg" })); cancel(); });
     const show = blob => {
       URL.revokeObjectURL(previewUrl);
       previewUrl = URL.createObjectURL(blob);
@@ -810,6 +1018,7 @@ function editScan(initialCanvas, onSelect) {
     show(selected);
     selectMode.addEventListener("change", async () => {
       const mode = selectMode.value;
+      recordActivity("scan_mode");
       selectMode.disabled = use.disabled = true;
       try {
         cached[mode] ??= await result.enhance(mode);
@@ -817,8 +1026,35 @@ function editScan(initialCanvas, onSelect) {
       } catch (error) { message.textContent = error.message; selectMode.value = Object.keys(cached).find(key => cached[key] === selected); }
       finally { selectMode.disabled = use.disabled = false; }
     });
-    content.replaceChildren(img);
-    actions.replaceChildren(button("返回裁剪", () => crop(), "secondary"), selectMode, use);
+    const recognized = make("textarea", { rows: 6, "aria-label": "可编辑的识别文字" });
+    const ocrStatus = make("p", { className: "small", role: "status" });
+    const copy = button("复制文字", async () => {
+      try { await navigator.clipboard.writeText(recognized.value); ocrStatus.textContent = "文字已复制。"; }
+      catch { recognized.select(); ocrStatus.textContent = "请手动复制选中的文字。"; }
+    }, "secondary");
+    const resultPanel = make("div", { className: "scan-ocr", hidden: "" }, recognized, copy);
+    const ocr = button("识别文字", async () => {
+      let engine;
+      recordActivity("scan_ocr");
+      ocr.disabled = true;
+      ocrStatus.textContent = "正在准备本机识字…";
+      try {
+        const { default: { createWorker } } = await import("/ocr/tesseract.esm.min.js");
+        engine = await createWorker("chi_sim+eng", 1, {
+          workerPath: "/ocr/worker.min.js", corePath: "/ocr", langPath: "/ocr", workerBlobURL: false,
+          logger: event => {
+            if (event.status === "recognizing text") ocrStatus.textContent = "正在识别 " + Math.round(event.progress * 100) + "%";
+          }
+        });
+        const { data } = await engine.recognize(selected);
+        recognized.value = data.text.trim();
+        resultPanel.hidden = !recognized.value;
+        ocrStatus.textContent = recognized.value ? "整体置信度 " + Math.round(data.confidence) + "%，请核对姓名、学号和日期。" : "未识别到文字，可返回裁剪或换一张清晰照片。";
+      } catch { ocrStatus.textContent = "识字失败，请重试或继续使用扫描件。"; }
+      finally { if (engine) await engine.terminate(); ocr.disabled = false; }
+    }, "secondary");
+    content.replaceChildren(img, ocrStatus, resultPanel);
+    actions.replaceChildren(button("返回裁剪", () => crop(), "secondary"), selectMode, ocr, use);
   }
 
   crop();
@@ -835,7 +1071,9 @@ function checkPage() {
     const scanButton = button("拍照扫描", () => scanInput.click(), "secondary");
     const gallery = make("input", { type: "file", accept: "image/*", className: "hidden-input", tabindex: "-1", "aria-label": "扫描照片" });
     const fileStatus = make("p", { className: "small", role: "status" });
-    let scannedFile = null;
+    let scannedFile = null, uploadKey = null;
+    const submit = make("button", { className: "btn", type: "submit", text: "检查并提交" });
+    const progress = make("p", { className: "small", role: "status" });
     const form = make("form", { className: "check-form" },
       select("选择材料", "materialId", materialChoices),
       make("label", { className: "upload-drop" },
@@ -843,11 +1081,18 @@ function checkPage() {
         make("strong", { text: "选择 Word、PDF 或图片" }),
         make("span", { className: "small", text: "点击选择 · 每份最大 10 MB" }),
         make("input", { name: "file", type: "file", accept: materialAccept, "aria-label": "材料文件" })),
-      fileStatus, make("div", { className: "upload-actions" }, scanButton, button("扫描相册图片", () => gallery.click(), "secondary"), make("button", { className: "btn", type: "submit", text: "检查并提交" })));
+      fileStatus, progress, make("div", { className: "upload-actions" }, scanButton, button("扫描相册图片", () => gallery.click(), "secondary"), submit));
     form.append(scanInput, gallery);
     const input = form.elements.file;
+    function resetUpload() {
+      uploadKey = null;
+      progress.textContent = "";
+      submit.textContent = "检查并提交";
+    }
+    form.elements.materialId.addEventListener("change", resetUpload);
     input.addEventListener("change", () => {
       scannedFile = null;
+      resetUpload();
       fileStatus.textContent = input.files[0]?.name || "";
     });
     async function chooseScan(event) {
@@ -861,6 +1106,7 @@ function checkPage() {
         if (!form.isConnected) return;
         editScan(canvas, scan => {
           scannedFile = scan;
+          resetUpload();
           input.value = "";
           fileStatus.textContent = "已选扫描件：" + scan.name;
         });
@@ -883,14 +1129,24 @@ function checkPage() {
         const data = new FormData(form);
         data.set("file", file);
         data.set("results", JSON.stringify(results));
-        const saved = await api("/api/checks", { method: "POST", body: data });
+        uploadKey ??= randomHex(16);
+        data.set("uploadId", uploadKey);
+        const saved = await uploadWithProgress("/api/checks", data, progress);
+        resetUpload();
+        input.value = "";
+        fileStatus.textContent = "";
+        scannedFile = null;
         output.replaceChildren(make("div", { className: "panel-head" }, make("h2", { text: inspected ? "质检结果" : "提交结果" }), inspected ? make("span", { className: "small", text: results.length + " 项结果" }) : null),
           inspected ? make("div", { className: "results-list" },
             results.length ? results.map(r => make("div", { className: "result-row" }, make("strong", { text: r.message }), p(r.suggestion))) :
               [make("div", { className: "result-row" }, make("strong", { text: "未发现格式问题" }), p("已完成当前规则检查。"))]) : null,
           notice(inspected ? "文件已提交，DOCX 格式检查已完成。" : "文件已提交，等待人工审阅。", "success"),
           make("a", { className: "text-link", href: "/api/checks/" + saved.id + "/file", text: "下载已保存的材料 →" }));
-      } catch (error) { feedback(form, error.message); }
+      } catch (error) {
+        progress.textContent = "";
+        if (uploadKey) submit.textContent = "重试提交";
+        feedback(form, error.message);
+      }
       finally { release(); }
     });
     shell.replaceChildren(pageHead("STUDENT / SUBMISSION", "材料提交", "上传 Word、PDF 或图片，提交后可在材料记录中查看。"),
@@ -900,59 +1156,147 @@ function checkPage() {
   return shell;
 }
 
+async function previewSubmission(item) {
+  recordActivity("preview_submission");
+  const dialog = make("dialog", { className: "scan-overlay-card review-preview", "aria-label": "材料预览" });
+  const content = make("div", { className: "scan-content" }, p("正在载入预览…"));
+  const link = "/api/checks/" + item.id + "/file";
+  dialog.append(make("h2", { text: item.filename }), content, make("div", { className: "upload-actions" },
+    make("a", { href: link, text: "下载原件", className: "text-link" }), button("关闭", () => dialog.close(), "secondary")));
+  let objectUrl, task;
+  const controller = new AbortController();
+  dialog.addEventListener("close", () => {
+    controller.abort();
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    if (task) task.destroy().catch(() => {});
+    dialog.remove();
+  }, { once: true });
+  document.body.append(dialog);
+  dialog.showModal();
+  try {
+    const response = await fetch(link, { signal: controller.signal });
+    if (!response.ok) throw new Error();
+    const blob = await response.blob();
+    if (!dialog.open) return;
+    if (blob.type.startsWith("image/")) {
+      objectUrl = URL.createObjectURL(blob);
+      content.replaceChildren(make("img", { className: "scan-preview", src: objectUrl, alt: item.material_name }));
+      return;
+    }
+    const pdfjs = await import("/pdf.min.js");
+    if (!dialog.open) return;
+    pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+    task = pdfjs.getDocument({ data: new Uint8Array(await blob.arrayBuffer()), isEvalSupported: false });
+    const pdf = await task.promise;
+    let number = 1;
+    const canvas = make("canvas");
+    const status = make("span", { role: "status", className: "small" });
+    const previous = button("上一页", () => { number--; draw(); }, "secondary");
+    const next = button("下一页", () => { number++; draw(); }, "secondary");
+    async function draw() {
+      previous.disabled = next.disabled = true;
+      try {
+        const page = await pdf.getPage(number);
+        const viewport = page.getViewport({ scale: 1 });
+        const scaled = page.getViewport({ scale: Math.min(2, 1250 / viewport.width, 1700 / viewport.height) });
+        canvas.width = Math.ceil(scaled.width);
+        canvas.height = Math.ceil(scaled.height);
+        await page.render({ canvasContext: canvas.getContext("2d"), canvas, viewport: scaled }).promise;
+        status.textContent = "第 " + number + " / " + pdf.numPages + " 页";
+        previous.disabled = number === 1;
+        next.disabled = number === pdf.numPages;
+      } catch { if (dialog.open) status.textContent = "此页无法预览，请下载原件查看。"; }
+    }
+    content.replaceChildren(make("div", { className: "upload-actions" }, previous, status, next), canvas);
+    await draw();
+  } catch { if (dialog.open) content.replaceChildren(p("无法预览，请下载原件查看。")); }
+}
+
 function checksPage(monitor = false) {
   const title = monitor ? "班级材料" : "已提交文件";
-  const description = monitor ? "查看并初审本班提交的材料。" : "按权限查看并下载学生提交的材料。";
-  const shell = make("div", { className: "view view-checks" }, pageHead("STAFF / DOCUMENTS", title, description), notice("正在读取记录…"));
-  (async () => { try {
-    const data = await api("/api/checks");
-    const selected = new Set();
-    const count = make("span", { className: "bulk-count", text: "已选 0 份" });
-    const canReview = x => x.review_status === "待审阅" && (monitor ? !x.monitor_approved : !!x.monitor_approved);
-    const checks = data.checks.filter(canReview);
-    const table = make("table", { className: "data" },
-      make("thead", {}, make("tr", {},
-        make("th", { className: "bulk-select" }, make("input", { type: "checkbox", "aria-label": "选择全部待审阅材料", onchange: event => {
-          table.querySelectorAll("tbody input[type=checkbox]").forEach(box => { box.checked = event.target.checked; box.dispatchEvent(new Event("change")); });
-        } })),
-        ["学生", "材料", "文件", "审阅状态", "检查时间"].map(x => make("th", { text: x })))),
-      make("tbody", {}, data.checks.map(x => make("tr", {},
-        make("td", { className: "bulk-select" }, canReview(x) ? make("input", { type: "checkbox", value: x.id, "aria-label": "选择 " + (x.student_name || x.student_id) + " 的 " + x.material_name, onchange: event => {
-          if (event.target.checked) selected.add(x.id); else selected.delete(x.id);
-          count.textContent = "已选 " + selected.size + " 份";
-        } }) : null),
-        make("td", { text: x.student_name || String(x.student_id) }),
-        make("td", { text: x.material_name }),
-        make("td", {}, make("a", { href: "/api/checks/" + x.id + "/file", text: x.filename })),
-        make("td", {}, make("span", { className: "review-pill " + (x.review_status === "已通过" ? "approved" : x.review_status === "退回修改" ? "returned" : ""), text: x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待班长初审" : x.review_status, title: x.review_note || "" })),
-        make("td", { text: x.checked_at })))));
-    const note = field("退回修改说明", "reviewNote", "text", false);
-    const review = async status => {
-      if (!selected.size) return feedback(tools, "请先选择待审阅材料");
-      if (status === "退回修改" && !note.querySelector("input").value.trim()) return feedback(tools, "请填写退回修改说明");
-      if (!confirm("确认将 " + selected.size + " 份材料标记为「" + status + "」？")) return;
-      try {
-        const result = await post("/api/admin/checks/bulk-review", { checkIds: [...selected], status, note: note.querySelector("input").value });
-        alert("已审阅 " + result.count + " 份材料，学生将收到站内通知。");
-        render();
-      } catch (error) { feedback(tools, error.message); }
-    };
-    const approve = async () => {
-      if (!selected.size) return feedback(tools, "请先选择待初审材料");
-      try {
-        await post("/api/checks/monitor-approve", { checkIds: [...selected] });
-        render();
-      } catch (error) { feedback(tools, error.message); }
-    };
-    const tools = monitor ? make("div", { className: "bulk-tools" }, count, button("初审通过", approve)) :
-      make("div", { className: "bulk-tools" }, count,
-      button("批量通过", () => review("已通过")), note,
-      button("批量退回", () => review("退回修改"), "secondary"));
-    shell.replaceChildren(pageHead("STAFF / DOCUMENTS", title, description),
-      panel(make("div", { className: "panel-head" }, make("h2", { text: "学生提交记录" }), make("span", { className: "small", text: "待审阅 " + checks.length + " / 共 " + data.checks.length + " 条" })),
-        data.checks.length ? tools : null,
-        data.checks.length ? tableWrap(table) : make("div", { className: "empty-state" }, make("strong", { text: "暂无质检记录" }), "学生上传材料后会在这里显示。")));
-  } catch (error) { shell.replaceChildren(pageHead("STAFF / DOCUMENTS", title), notice(error.message, "error")); } })();
+  const shell = make("div", { className: "view view-checks" }, pageHead("STAFF / DOCUMENTS", title, "按班级、提交时间和审阅状态查找材料。"));
+  const rows = make("tbody");
+  const selected = new Set();
+  const count = make("span", { className: "bulk-count", text: "已选 0 份" });
+  const canReview = x => x.review_status === "待审阅" && (monitor ? !x.monitor_approved : !!x.monitor_approved);
+  const note = field("退回修改说明", "reviewNote", "text", false);
+  const noteInput = note.querySelector("input");
+  const selectAll = make("input", { type: "checkbox", "aria-label": "选择本页待审阅材料", onchange: event => {
+    rows.querySelectorAll("input[type=checkbox]").forEach(box => { box.checked = event.target.checked; box.dispatchEvent(new Event("change")); });
+  } });
+  const table = make("table", { className: "data" }, make("thead", {}, make("tr", {},
+    make("th", { className: "bulk-select" }, selectAll),
+    ["学生 / 班级", "材料", "文件", "审阅状态", "提交时间"].map(text => make("th", { text })))), rows);
+  const classField = select("班级", "classId", [["", "全部班级"]]);
+  const statusField = select("状态", "status", [["", "全部状态"], ["staff", "待辅导员审阅"], ["monitor", "待班长初审"], ["approved", "已通过"], ["returned", "退回修改"]]);
+  const since = field("提交日期起", "since", "date", false);
+  const filters = make("form", { className: "bulk-tools review-filters" }, monitor ? null : classField, statusField, since,
+    make("button", { type: "submit", className: "secondary", text: "筛选" }));
+  let reviewing = false;
+  const submit = async status => {
+    if (reviewing) return;
+    if (!selected.size || selected.size > 20) return feedback(tools, "请选择 1 至 20 份待审阅材料");
+    if (status === "退回修改" && !noteInput.value.trim()) { noteInput.focus(); return feedback(tools, "请填写退回修改说明"); }
+    const checkIds = [...selected], reason = noteInput.value;
+    reviewing = true;
+    try {
+      if (!await actionDialog(status || "初审通过", "将处理选中的 " + checkIds.length + " 份材料。")) return;
+      clearFeedback(tools);
+      const result = monitor ? await post("/api/checks/monitor-approve", { checkIds }) :
+        await post("/api/admin/checks/bulk-review", { checkIds, status, note: reason });
+      noteInput.value = "";
+      await load();
+      feedback(tools, "已处理 " + result.count + " 份材料。", "success");
+    } catch (error) { feedback(tools, error.message); }
+    finally { reviewing = false; }
+  };
+  const tools = monitor ? make("div", { className: "bulk-tools" }, count, button("初审通过", () => submit(null))) :
+    make("div", { className: "bulk-tools" }, count, button("批量通过", () => submit("已通过")), note, button("批量退回", () => submit("退回修改"), "secondary"));
+  let before = "", appliedFilters = {};
+  const more = button("下一页", () => load(before), "secondary");
+  const first = button("回到第一页", () => load(), "secondary");
+  first.hidden = more.hidden = true;
+  async function load(cursor = "") {
+    const release = busy(filters);
+    try {
+      const params = new URLSearchParams(appliedFilters);
+      if (cursor) params.set("before", cursor);
+      const data = await api("/api/checks?" + params);
+      if (!monitor) {
+        const selector = classField.querySelector("select");
+        const current = appliedFilters.classId || "";
+        selector.replaceChildren(make("option", { value: "", text: "全部班级" }),
+          (data.classes || []).map(x => make("option", { value: x.id, text: x.name })));
+        selector.value = current;
+      }
+      selected.clear();
+      selectAll.checked = false;
+      count.textContent = "已选 0 份";
+      rows.replaceChildren(...data.checks.map(x => {
+        const status = x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待班长初审" : x.review_status;
+        return make("tr", {},
+          make("td", { className: "bulk-select" }, canReview(x) ? make("input", { type: "checkbox", "aria-label": "选择 " + (x.student_name || x.student_id) + " 的 " + x.material_name, onchange: event => {
+            if (event.target.checked) selected.add(x.id); else selected.delete(x.id);
+            count.textContent = "已选 " + selected.size + " 份";
+          } }) : null),
+          make("td", {}, x.student_name || String(x.student_id), make("div", { className: "small", text: x.class_name || "未分班" })),
+          make("td", { text: x.material_name }),
+          make("td", {}, make("a", { href: "/api/checks/" + x.id + "/file", text: x.filename }),
+            /\.(pdf|jpe?g|png|webp|gif)$/i.test(x.filename) ? make("div", {}, button("预览", () => previewSubmission(x), "linklike")) : null),
+          make("td", {}, make("span", { className: "review-pill", text: status }),
+            x.review_note ? make("div", { className: "small", text: x.review_note }) : null),
+          make("td", { text: displayTime(x.checked_at) }));
+      }));
+      if (!data.checks.length) rows.append(make("tr", {}, make("td", { colspan: 6, text: "暂无符合筛选条件的材料。" })));
+      before = data.next;
+      first.hidden = !cursor;
+      more.hidden = !before;
+    } catch (error) { feedback(filters, error.message); }
+    finally { release(); }
+  }
+  filters.addEventListener("submit", event => { event.preventDefault(); appliedFilters = formData(filters); load(); });
+  shell.append(panel(filters, tools, tableWrap(table), make("div", { className: "upload-actions" }, first, more)));
+  load();
   return shell;
 }
 
@@ -966,6 +1310,10 @@ function formsPage() {
       field("文件（Word、Excel、PDF 或图片，最大 10 MB）", "file", "file"),
       make("button", { className: "btn", type: "submit", text: "上传学院表格" })) : null;
     if (upload) {
+      let uploadId;
+      const progress = make("p", { className: "small", role: "status" });
+      upload.append(progress);
+      upload.addEventListener("input", () => { uploadId = null; progress.textContent = ""; });
       upload.querySelector("[name=file]").setAttribute("accept", materialAccept + ",.xls,.xlsx");
       upload.addEventListener("submit", async event => {
         event.preventDefault();
@@ -975,9 +1323,11 @@ function formsPage() {
           if (!file || file.size > 10 * 1024 * 1024) throw new Error("请选择不超过 10 MB 的表格文件");
           const body = new FormData(upload);
           body.set("file", normalizedAttachment(file, true));
-          await api("/api/forms", { method: "POST", body });
-          render();
-        } catch (error) { feedback(upload, error.message); }
+          uploadId ??= randomHex(16);
+          body.set("uploadId", uploadId);
+          await uploadWithProgress("/api/forms", body, progress);
+          refreshWithFeedback("表格已上传。");
+        } catch (error) { progress.textContent = ""; feedback(upload, error.message + "。可保留文件再次提交。"); }
         finally { release(); }
       });
     }
@@ -988,7 +1338,7 @@ function formsPage() {
           make("a", { className: "secondary", href: "/api/forms/" + item.id + "/file", text: "下载文件 ↓" })));
       const official = officialForms.filter(item => item.stage === stage.slug).map(item => {
         const actions = make("div", { className: "form-actions" },
-          make("a", { className: "secondary", href: item.url, target: "_blank", rel: "noopener noreferrer", text: "下载原件 ↗" }),
+          make("a", { className: "secondary", href: item.url, target: "_blank", rel: "noopener noreferrer", text: "下载原件 ↗", onclick: () => recordActivity("download_official_form") }),
           make("a", { className: "text-link small", href: item.source, target: "_blank", rel: "noopener noreferrer", text: "来源" }));
         return make("li", { className: "form-item" },
           make("div", {}, make("strong", { text: item.title }), make("span", { className: "small", text: "中国民航大学党委组织部 · " + item.filename })), actions);
@@ -1099,9 +1449,10 @@ function adminPage() {
     const selectedStudents = new Set();
     const studentCount = make("span", { className: "bulk-count", text: "已选 0 人" });
     const setMonitor = async (student, cls) => {
-      if (!confirm("将 " + student.name + "（" + student.student_no + "）设为「" + cls.name + "」的班长？")) return;
+      if (!cls) return feedback(shell, "请先将学生分配到班级");
+      if (!await actionDialog("设置班长", "将 " + student.name + " 设为「" + cls.name + "」的班长。")) return;
       try { await post("/api/admin/classes/monitor", { classId: cls.id, studentId: student.id }); render(); }
-      catch (error) { alert(error.message); }
+      catch (error) { feedback(shell, error.message); }
     };
     const students = make("table", { className: "data" },
       make("thead", {}, make("tr", {}, make("th", { className: "bulk-select" }, make("input", { type: "checkbox", "aria-label": "选择全部学生", onchange: event => {
@@ -1117,10 +1468,10 @@ function adminPage() {
         make("td", { text: data.nodes.find(x => x.slug === student.current_node_slug)?.name || "" }),
         make("td", {}, button("管理", () => showStudent(student, data), "secondary"),
           button("设班长", () => setMonitor(student, data.classes.find(c => c.id === student.class_id)), "secondary"),
-          button("删除", async () => {
-            if (!confirm("确认删除学生 " + student.name + "（学号 " + student.student_no + "）？此操作不可恢复。")) return;
+          button("移入回收站", async () => {
+            if (!await actionDialog("移入回收站", student.name + " 将无法登录。可在回收站恢复账号。", "移入回收站")) return;
             try { await post("/api/admin/students/bulk-delete", { studentIds: [student.id] }); render(); }
-            catch (error) { alert(error.message); }
+            catch (error) { feedback(shell, error.message); }
           }, "secondary"))))));
     const counselorsTable = make("table", { className: "data" },
       make("thead", {}, make("tr", {}, ["姓名", "用户名", "专业", "操作"].map(x => make("th", { text: x })))),
@@ -1128,25 +1479,24 @@ function adminPage() {
         make("td", { text: counselor.name || "—" }),
         make("td", { text: counselor.username }),
         make("td", { text: counselor.major_name || "未分配" }),
-        make("td", {}, button("删除", async () => {
-          if (!confirm("确认删除辅导员 " + (counselor.name || counselor.username) + "？其上传的表格也会一并删除。此操作不可恢复。")) return;
+        make("td", {}, button("移入回收站", async () => {
+          if (!await actionDialog("移入回收站", (counselor.name || counselor.username) + " 将无法登录。可在回收站恢复账号。", "移入回收站")) return;
           try { await post("/api/admin/counselors/bulk-delete", { usernames: [counselor.username] }); render(); }
-          catch (error) { alert(error.message); }
+          catch (error) { feedback(shell, error.message); }
         }, "secondary"))))));
     const bulkAction = async action => {
       if (!selectedStudents.size) return feedback(bulkTools, "请先选择学生");
       if (selectedStudents.size > 20) return feedback(bulkTools, "每次最多处理 20 名学生");
-      if (action === "advance" && !confirm("确认将所选 " + selectedStudents.size + " 名学生推进至下一培养阶段？")) return;
-      if (action === "delete" && prompt("将永久删除所选 " + selectedStudents.size + " 名学生的账号、档案、材料和对话。请输入“删除”确认：") !== "删除") return;
+      if (action === "advance" && !await actionDialog("推进培养阶段", "将所选 " + selectedStudents.size + " 名学生推进至下一培养阶段。")) return;
+      if (action === "delete" && !await actionDialog("批量移入回收站", "所选 " + selectedStudents.size + " 名学生将无法登录。可在回收站恢复账号。", "移入回收站")) return;
       try {
         const result = await post("/api/admin/students/bulk-" + action, { studentIds: [...selectedStudents] });
-        alert("已" + (action === "delete" ? "删除" : "推进") + " " + result.count + " 名学生。" + (result.cleanupFailed ? "有 " + result.cleanupFailed + " 份文件清理失败，已记录到服务器日志。" : ""));
-        render();
+        refreshWithFeedback(action === "delete" ? "已将 " + result.count + " 个账号移入回收站。" : "已推进 " + result.count + " 名学生。");
       } catch (error) { feedback(bulkTools, error.message); }
     };
     const bulkTools = make("div", { className: "bulk-tools" }, studentCount,
       button("批量推进下一阶段", () => bulkAction("advance")),
-      button("批量删除账号", () => bulkAction("delete"), "secondary"));
+      button("批量移入回收站", () => bulkAction("delete"), "secondary"));
     const metrics = make("div", { className: "metric-grid" },
       metric("学生档案", String(data.students.length), "当前可管理的学生"),
       ...(me.role === "admin" ? [metric("辅导员", String(data.counselors.length), "已注册辅导员")] : []),
@@ -1154,6 +1504,9 @@ function adminPage() {
       ...(me.role === "admin" ? [metric("专业", String(data.majors.length), "已配置专业"), metric("学院", String(data.colleges.length), "已配置学院")] : []),
       ...(me.role === "admin" ? [metric("有效邀请", String(data.invites.filter(x => x.role === "counselor" && !x.used_by && new Date(x.expires_at) > new Date()).length), "未使用的辅导员邀请码", true)] : []));
     shell.replaceChildren(pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"),
+      make("div", { className: "upload-actions" },
+        make("a", { href: "#operations", className: "secondary", text: "操作记录" }),
+        make("a", { href: "#recycle", className: "secondary", text: "回收站" })),
       metrics,
       panel(make("div", { className: "panel-head" }, make("h2", { text: "检索学生" })), searchForm),
       ...(addStudentForm ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "手动添加学生" }), make("span", { className: "small", text: "单独添加一名学生到班级，初始密码 cauc+学号。" })), addStudentForm)] : []),

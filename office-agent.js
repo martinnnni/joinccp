@@ -1,5 +1,5 @@
 const operations = {
-  register_students: ["{classId?,students:[{name,studentNo}]}，学生归入指定班级，必须指定班级", "students", ["classId"]],
+  register_students: ["{classId?,students:[{name,studentNo}]}，按顺序保留从名单读取的每行和重复行；看不清的姓名或学号留空，班级未知时省略 classId，由用户在预览里选择并校对", "students", ["classId"]],
   update_students: ["{rows:[{student,major?,grade?,phone?,appliedAt?,stageSlug?,nodeSlug?,materialName?,status?}]}，日期 YYYY-MM-DD，状态为 未交/已交/已通过", "rows"],
   upload_forms: ["{files:[{filename,title,stageSlug}]}", "files"],
   upload_student_files: ["{files:[{filename,student,materialName}]}", "files"],

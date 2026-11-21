@@ -23,7 +23,7 @@ function makeEnv({ existingUser = false, counselorRows = [] } = {}) {
           return null;
         },
         async all() {
-          if (sql.includes("role='counselor' AND username IN")) return { results: counselorRows.map((row, i) => ({ id: row.id ?? i + 5, username: row.username ?? this.params[i] })) };
+          if (sql.includes("role='counselor' AND deleted_at IS NULL AND username IN")) return { results: counselorRows.map((row, i) => ({ id: row.id ?? i + 5, username: row.username ?? this.params[i] })) };
           if (sql.includes("FROM form_templates WHERE uploaded_by")) return { results: [{ r2_key: "forms/2/one.docx" }] };
           if (sql.includes("FROM users WHERE username IN")) return { results: existingUser ? [{ username: this.params[0] }] : [] };
           return { results: [] };
@@ -85,14 +85,14 @@ test("管理员可批量添加辅导员到指定专业", async () => {
   await assert.rejects(adminRoutes(request("/api/admin/counselors/auto-register", { majorId: 2, counselors: [{ name: "王老师", username: "wang1" }] }), env, "/api/admin/counselors/auto-register", counselor), { status: 403 });
 });
 
-test("仅管理员可批量删除辅导员，并清理其上传表格", async () => {
+test("仅管理员可移除辅导员，上传表格仍保留", async () => {
   await assert.rejects(adminRoutes(request("/api/admin/counselors/bulk-delete", { usernames: ["wang1"] }), makeEnv().env, "/api/admin/counselors/bulk-delete", counselor), { status: 403 });
   const { env, batches, deleted } = makeEnv({ counselorRows: [{ id: 5, username: "wang1" }] });
   const res = await adminRoutes(request("/api/admin/counselors/bulk-delete", { usernames: ["wang1"] }), env, "/api/admin/counselors/bulk-delete", admin);
   assert.equal((await res.json()).count, 1);
-  assert.match(batches[0][0].sql, /DELETE FROM form_templates/);
-  assert.match(batches[0].at(-1).sql, /DELETE FROM users WHERE role='counselor'/);
-  assert.deepEqual(deleted, ["forms/2/one.docx"]);
+  assert.match(batches[0][0].sql, /UPDATE users SET deleted_at/);
+  assert.match(batches[0].at(-1).sql, /INSERT INTO operation_logs/);
+  assert.deepEqual(deleted, []);
 });
 
 test("辅导员名单解析姓名+用户名或纯用户名", () => {

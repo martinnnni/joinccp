@@ -87,11 +87,11 @@ test("管理员可批量生成辅导员邀请码，辅导员不可邀请", async
   await assert.rejects(adminRoutes(request(action, { majorId: 2, role: "student" }), env, path(action), admin), { status: 400 });
 });
 
-test("批量删除清理关联数据与私有文件", async () => {
+test("批量移除记录账号编号并保留关联数据和文件", async () => {
   const { env, batches, deleted } = fakeEnv();
   const action = "students/bulk-delete";
   const response = await adminRoutes(request(action, { studentIds: [7] }), env, path(action), counselor);
   assert.equal((await response.json()).count, 1);
-  assert.match(batches[0].at(-1).sql, /DELETE FROM users/);
-  assert.deepEqual(deleted, ["checks/7/one.docx"]);
+  assert.match(batches[0].at(-1).sql, /INSERT INTO operation_logs/);
+  assert.deepEqual(deleted, []);
 });

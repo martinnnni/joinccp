@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { officeRoutes } from "../worker.js";
+import worker, { checkRoutes, officeRoutes } from "../worker.js";
 
 const counselor = { id: 8, role: "counselor", major_id: 2 };
 const admin = { id: 1, role: "admin" };
@@ -16,7 +17,7 @@ function setup(t) {
   }
   const deleted = [];
   const env = {
-    DEEPSEEK_API_KEY: "test",
+    DEEPSEEK_API_KEY: "test", AUTH_PEPPER: "x".repeat(40),
     DB: {
       prepare(sql) {
         const statement = db.prepare(sql);
@@ -41,7 +42,7 @@ function setup(t) {
         } catch (error) { db.exec("ROLLBACK"); throw error; }
       }
     },
-    FILES: { async delete(key) { deleted.push(key); } }
+    FILES: { async put() {}, async delete(key) { deleted.push(key); } }
   };
   db.exec(`
     INSERT INTO departments(id,name) VALUES(2,'甲院'),(3,'乙院');
@@ -64,7 +65,7 @@ function setup(t) {
     message: { content: JSON.stringify({ reply: "请核对", action: desired }) }
   }] }));
   return {
-    db, deleted,
+    db, deleted, env, call,
     async plan(action, user = counselor) {
       desired = action;
       return (await call("plan", { question: "处理测试任务" }, user)).json();
@@ -91,19 +92,22 @@ test("站内信预览确定收件人，确认只发送一次，执行前复核�
   assert.deepEqual(db.prepare("SELECT student_id FROM notifications ORDER BY id").all().map(row => row.student_id), [11, 12]);
 });
 
-test("删除只处理已预览的名单，跨院系名单整批拒绝，并清理关联材料", async t => {
+test("回收站保留材料，跨院系名单整批拒绝", async t => {
   const { db, deleted, plan, execute } = setup(t);
   db.exec("INSERT INTO checks(student_id,material_id,r2_key,filename) SELECT 11,id,'checks/test/a.docx','a.docx' FROM materials LIMIT 1");
   const rejected = await plan({ type: "delete_students", students: [{ student: "100011" }, { student: "100013" }] });
   assert.equal(rejected.plan, null);
   assert.equal(db.prepare("SELECT count(*) AS n FROM office_plans").get().n, 0);
   const accepted = (await plan({ type: "delete_students", students: [{ student: "测试甲" }, { student: "100012" }] })).plan;
-  assert.match(accepted.preview, /无法恢复/);
+  assert.match(accepted.preview, /回收站/);
   assert.match(accepted.preview, /100011.*100012/);
   assert.equal(db.prepare("SELECT count(*) AS n FROM profiles").get().n, 3);
   assert.equal((await (await execute(accepted)).json()).count, 2);
-  assert.deepEqual(db.prepare("SELECT student_no FROM profiles").all().map(row => row.student_no), ["100013"]);
-  assert.deepEqual(deleted, ["checks/test/a.docx"]);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM profiles").get().n, 3);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM checks").get().n, 1);
+  assert.deepEqual(db.prepare("SELECT username FROM users WHERE deleted_at IS NOT NULL ORDER BY id").all().map(row => row.username), ["100011", "100012"]);
+  assert.equal(db.prepare("SELECT targets FROM operation_logs WHERE action='archive_student'").get().targets, "11,12");
+  assert.deepEqual(deleted, []);
 });
 
 test("管理员新增学院和生成邀请码，辅导员仅能查询本专业学生", async t => {
@@ -145,4 +149,82 @@ test("对话确认后推进培养阶段、审阅最新材料并通知学生", as
   await execute(latest);
   assert.equal(db.prepare("SELECT review_status FROM checks ORDER BY id DESC LIMIT 1").get().review_status, "已通过");
   assert.equal(db.prepare("SELECT count(*) AS n FROM notifications WHERE student_id=11").get().n, 2);
+});
+
+test("批量名单逐行标记重复、缺项和已存在账号，校验通过后才创建执行计划", async t => {
+  const { db, call } = setup(t);
+  const bad = await (await call("roster-preview", { classId: 2, rows: [
+    { name: "测试甲", studentNo: "100011", line: 4 },
+    { name: "", studentNo: "100011" },
+    { name: "测试丁", studentNo: "abc" }
+  ] })).json();
+  assert.equal(bad.plan, null);
+  assert.equal(bad.roster.rows[0].line, 4);
+  assert.equal(bad.roster.rows[0].issues.length, 2);
+  assert.equal(bad.roster.rows[1].issues.length, 3);
+  assert.equal(bad.roster.rows[2].issues.length, 1);
+  const rows = [{ name: "测试丁", studentNo: "100015" }];
+  assert.equal((await (await call("roster-preview", { classId: 3, rows })).json()).plan, null);
+  const accepted = await (await call("roster-preview", { classId: 2, rows })).json();
+  assert.equal(accepted.plan.type, "register_students");
+  assert.equal(db.prepare("SELECT count(*) AS n FROM profiles WHERE student_no='100015'").get().n, 0);
+  assert.equal((await (await call("execute", { planId: accepted.plan.id })).json()).count, 1);
+  assert.equal(db.prepare("SELECT must_change_password FROM users WHERE username='100015'").get().must_change_password, 1);
+});
+
+test("材料断线重试只写入一次，并保留上一版本", async t => {
+  const { db, env, deleted } = setup(t);
+  const path = "/api/checks";
+  const user = { id: 11, role: "student", class_id: 2 };
+  const material = db.prepare("SELECT id FROM materials LIMIT 1").get().id;
+  const send = uploadId => {
+    const form = new FormData();
+    form.set("uploadId", uploadId);
+    form.set("materialId", material);
+    form.set("file", new File(["%PDF-1.7"], "scan.pdf", { type: "application/pdf" }));
+    return checkRoutes(new Request("https://example.test" + path, { method: "POST", body: form }), env, path, user);
+  };
+  const first = await (await send("a".repeat(32))).json();
+  const duplicate = await (await send("a".repeat(32))).json();
+  assert.deepEqual(duplicate, { ok: true, id: first.id, repeated: true });
+  const next = await (await send("b".repeat(32))).json();
+  assert.notEqual(first.id, next.id);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM checks WHERE student_id=11").get().n, 2);
+  assert.deepEqual(deleted, []);
+});
+
+test("无权限的请求也留下记录，查询参数不写入", async t => {
+  const { db, env } = setup(t);
+  const jobs = [];
+  const result = await worker.fetch(new Request("https://example.test/api/admin/recycle?value=secret"), env, { waitUntil: job => jobs.push(job) });
+  assert.equal(result.status, 401);
+  await Promise.all(jobs);
+  const row = db.prepare("SELECT action,method,status,actor_id FROM operation_logs").get();
+  assert.deepEqual({ ...row }, { action: "/api/admin/recycle", method: "GET", status: 401, actor_id: null });
+});
+
+test("辅导员只能恢复自己专业的学生，恢复结果与访问审计可查询", async t => {
+  const { db, env } = setup(t);
+  const token = "a".repeat(64);
+  db.prepare("INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,8,'2099-01-01T00:00:00Z')")
+    .run(createHash("sha256").update(token).digest("hex"));
+  db.exec("UPDATE users SET deleted_at=CURRENT_TIMESTAMP WHERE id IN (11,13)");
+  const call = async (endpoint, body) => {
+    const jobs = [];
+    const response = await worker.fetch(new Request("https://example.test/api/admin/" + endpoint, {
+      method: body ? "POST" : "GET",
+      headers: { cookie: "session=" + token, origin: "https://example.test", "content-type": "application/json" },
+      ...(body ? { body: JSON.stringify(body) } : {})
+    }), env, { waitUntil: job => jobs.push(job) });
+    await Promise.all(jobs);
+    return response;
+  };
+  const listed = await (await call("recycle")).json();
+  assert.deepEqual(listed.accounts.map(account => account.id), [11]);
+  assert.equal((await call("recycle/restore", { userId: 13 })).status, 404);
+  assert.equal((await call("recycle/restore", { userId: 11 })).status, 200);
+  assert.equal(db.prepare("SELECT deleted_at FROM users WHERE id=11").get().deleted_at, null);
+  const logs = await (await call("operation-logs")).json();
+  assert.ok(logs.logs.some(row => row.action === "restore_account" && row.targets === "11"));
+  assert.ok(logs.logs.some(row => row.action === "/api/admin/recycle/restore" && row.status === 404));
 });
