@@ -37,6 +37,34 @@
 2. 运行 npx wrangler d1 migrations apply joinccp-preview --remote。
 3. 运行 npx wrangler secret put AUTH_PEPPER 与 npx wrangler secret put BOOTSTRAP_TOKEN。
 4. 运行 npm run deploy。
+
+## 阿里云服务器运行
+
+项目同时支持 Node.js 24 + SQLite 的普通 Linux 服务器运行方式。Cloudflare 版与服务器版共用 `worker.js`、前端和业务规则，服务器适配层位于 `server/`。
+
+服务器目录约定：
+
+- 程序部署到 `/opt/joinccp/current`。
+- SQLite 数据库和私有上传文件放在 `/var/lib/joinccp`。
+- 密钥放在 `/etc/joinccp/environment`，权限设为 `600`，不得提交到 Git。
+- Caddy 监听 80/443 并把请求转发到 `127.0.0.1:8787`。
+- `joinccp-cron.timer` 每天北京时间 09:00 执行提醒和过期会话清理。
+
+部署文件在 `deploy/alicloud/`。安装 Node.js 24、Caddy 和 Git 后，执行：
+
+```bash
+sudo useradd --system --home /var/lib/joinccp --shell /usr/sbin/nologin joinccp
+sudo install -d -o joinccp -g joinccp -m 750 /var/lib/joinccp
+sudo install -d -o root -g joinccp -m 750 /etc/joinccp
+sudo install -m 600 deploy/alicloud/environment.example /etc/joinccp/environment
+sudo cp deploy/alicloud/joinccp.service deploy/alicloud/joinccp-cron.service /etc/systemd/system/
+sudo cp deploy/alicloud/joinccp-cron.timer /etc/systemd/system/
+sudo cp deploy/alicloud/Caddyfile /etc/caddy/Caddyfile
+sudo systemctl daemon-reload
+sudo systemctl enable --now caddy joinccp.service joinccp-cron.timer
+```
+
+首次迁移现有 Cloudflare 数据时，先导出 D1，再运行 `node server/import-d1.mjs <导出文件> /var/lib/joinccp/joinccp.sqlite`。根据数据库中的 `r2_key` 下载 R2 私有对象，并保持相同相对路径写入 `/var/lib/joinccp/files`。切换域名前应校验账号数、提交记录数、私有对象数和文件总字节数。为保留现有密码，服务器的 `AUTH_PEPPER` 必须与 Cloudflare 生产 Secret 完全一致。若原值已丢失，需要统一重置密码并强制用户首次登录修改。
 5. 打开 https://joinccp.martinzhang.asia，初始化管理员并建立受邀测试账号。
 
 成长导师使用 `knowledge/` 下四份 Markdown 作为共享测试知识库，另按登录身份读取本人档案和材料状态。更新知识文件后运行 `npm run build`，会重新生成 `knowledge.generated.js`。需要启用 AI 回答时，由管理员执行 `npx wrangler secret put DEEPSEEK_API_KEY`，在终端输入密钥；不要把密钥写入仓库。接口使用 DeepSeek Chat Completions 的 `deepseek-flash` 非思考模式，不设每日提问次数限制。测试版资料只作参考，校内要求应按学校和党组织现行文件核对。

@@ -1,0 +1,11 @@
+HOST=127.0.0.1
+PORT=8787
+DATA_DIR=/var/lib/joinccp
+DATABASE_PATH=/var/lib/joinccp/joinccp.sqlite
+FILES_DIR=/var/lib/joinccp/files
+ASSETS_DIR=/opt/joinccp/current/public
+AUTH_PEPPER=replace-with-the-existing-production-value
+BOOTSTRAP_TOKEN=replace-with-a-random-value
+DEEPSEEK_API_KEY=replace-with-the-api-key
+RAG_MIN_SIMILARITY=0.32
+INTENT_MODEL=deepseek-flash
