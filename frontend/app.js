@@ -5,6 +5,7 @@ import { extractRosterText, readStructuredStudentRoster } from "./roster.js";
 import { deriveVerifier } from "./pbkdf2.js";
 import { fileExtension, materialAccept, maxBatchBytes, maxFileBytes, normalizedAttachment, officeAccept, uploadType } from "../upload-types.js";
 import { decodeImage, processImage, rotateScan, validCrop } from "./scan.js";
+import { expandZip } from "./zip.js";
 
 const root = document.getElementById("app");
 const navigation = document.getElementById("navigation");
@@ -573,23 +574,43 @@ function mentorPage() {
     let selectedFiles = [];
     const fileInput = make("input", { type: "file", accept: ".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document", className: "mentor-file-input", "aria-label": "选择 Word DOCX 或 PDF 文件" });
     const attachment = make("div", { className: "mentor-attachment", hidden: "" });
-    const clearFile = () => { selectedFile = null; selectedFiles = []; fileInput.value = ""; attachment.hidden = true; attachment.replaceChildren(); textarea.required = true; };
+    let selectedFromZip = false;
+    const clearFile = () => { selectedFile = null; selectedFiles = []; selectedFromZip = false; fileInput.value = ""; attachment.hidden = true; attachment.replaceChildren(); textarea.required = true; };
     const attach = make("button", { type: "button", className: "mentor-attach", "aria-label": "上传 Word 或 PDF 文件", title: "上传 Word DOCX 或 PDF" }, icon("M8 12.5 14.5 6a3 3 0 0 1 4.2 4.2l-8.1 8.1a5 5 0 0 1-7.1-7.1l8.4-8.4", "附件"));
+    const acceptStaffFiles = (incoming, zipNote) => {
+      if (!incoming.length) { clearFile(); appendMessage({ role: "assistant", content: "没有可用的文件。支持 Word、PDF、图片及 Excel、CSV、TXT，也可直接上传包含这些文件的 ZIP 压缩包。" }); return; }
+      if (incoming.length > 30 || incoming.some(item => (!uploadType(item.name, true) && !/\.(csv|txt)$/i.test(item.name)) || item.size < 1 || item.size > maxFileBytes)) {
+        clearFile(); appendMessage({ role: "assistant", content: "每次最多 30 份文件，每份最大 10 MB。支持 Word、PDF、图片及 Excel、CSV、TXT 名单，或包含这些文件的 ZIP 压缩包。" }); return;
+      }
+      if (incoming.reduce((total, item) => total + item.size, 0) > maxBatchBytes) {
+        clearFile(); appendMessage({ role: "assistant", content: "这批附件超过 30 MB，请分批发送。" }); return;
+      }
+      if (new Set(incoming.map(item => item.name.toLowerCase())).size !== incoming.length) {
+        clearFile(); appendMessage({ role: "assistant", content: "有多份附件同名，请改名或分批发送。" }); return;
+      }
+      selectedFiles = incoming; textarea.required = false; attachment.hidden = false;
+      attachment.replaceChildren(make("span", { text: (zipNote ? zipNote + "：" : "") + incoming.map(item => item.name).join("、") }), button("移除", clearFile, "mentor-remove-attachment"));
+    };
     const acceptFile = file => {
       if (!file || (Array.isArray(file) && !file.length)) return;
       if (staffAgent) {
-        const incoming = (Array.isArray(file) ? file : [file]).map(item => normalizedAttachment(item, true));
-        if (incoming.length > 10 || incoming.some(item => (!uploadType(item.name, true) && !/\.(csv|txt)$/i.test(item.name)) || item.size < 1 || item.size > maxFileBytes)) {
-          clearFile(); appendMessage({ role: "assistant", content: "每次最多选择 10 份文件，每份最大 10 MB。支持 Word、PDF、图片及 Excel、CSV、TXT 名单。" }); return;
-        }
-        if (incoming.reduce((total, item) => total + item.size, 0) > maxBatchBytes) {
-          clearFile(); appendMessage({ role: "assistant", content: "这批附件超过 30 MB，请分批发送。" }); return;
-        }
-        if (new Set(incoming.map(item => item.name)).size !== incoming.length) {
-          clearFile(); appendMessage({ role: "assistant", content: "有多份附件同名，请改名或分批发送。" }); return;
-        }
-        selectedFiles = incoming; textarea.required = false; attachment.hidden = false;
-        attachment.replaceChildren(make("span", { text: incoming.map(item => item.name).join("、") }), button("移除", clearFile, "mentor-remove-attachment"));
+        const raw = Array.isArray(file) ? file : [file];
+        const zips = raw.filter(item => /\.zip$/i.test(item.name));
+        const rest = raw.filter(item => !/\.zip$/i.test(item.name)).map(item => normalizedAttachment(item, true));
+        if (!zips.length) { selectedFromZip = false; acceptStaffFiles(rest, null); return; }
+        attachment.hidden = false;
+        attachment.replaceChildren(make("span", { text: "正在解包压缩包…" }));
+        (async () => {
+          try {
+            const all = rest.slice(), skippedAll = [];
+            for (const item of zips) {
+              const { files, skipped } = await expandZip(item);
+              all.push(...files); skippedAll.push(...skipped);
+            }
+            selectedFromZip = true;
+            acceptStaffFiles(all, "已从压缩包解出 " + all.length + " 份文件" + (skippedAll.length ? "（跳过不支持：" + skippedAll.join("、") + "）" : ""));
+          } catch (error) { clearFile(); appendMessage({ role: "assistant", content: error.message }); }
+        })();
         return;
       }
       const allowed = /\.(docx|pdf)$/i;
@@ -659,7 +680,7 @@ function mentorPage() {
       fileInput.accept = officeAccept;
       fileInput.setAttribute("aria-label", "选择办公任务文件");
       attach.setAttribute("aria-label", "选择办公任务文件");
-      attach.title = "选择最多 10 份文件";
+      attach.title = "选择最多 30 份文件，或包含文件的 ZIP 压缩包";
     }
     const content = make("div", { className: "mentor-content" }, log, form);
     shell.replaceChildren(aside, make("section", { className: "mentor-main", "aria-label": "成长导师" }, hero, header, content));
@@ -760,7 +781,10 @@ function mentorPage() {
       event.preventDefault();
       const question = form.elements.question.value.trim();
       const file = selectedFile;
-      if (staffAgent) { await handleOfficeSubmit(question, selectedFiles); return; }
+      if (staffAgent) {
+        const zipHint = selectedFromZip && !question ? "请把这批文件按培养阶段上传到资料下载专区" : question;
+        await handleOfficeSubmit(zipHint, selectedFiles); return;
+      }
       if (!file && question.length < 2) { textarea.setCustomValidity("请输入至少两个字的问题"); textarea.reportValidity(); textarea.setCustomValidity(""); return; }
       const release = busy(form);
       attach.disabled = true;
@@ -1496,7 +1520,7 @@ function adminPage() {
     };
     const bulkTools = make("div", { className: "bulk-tools" }, studentCount,
       button("批量推进下一阶段", () => bulkAction("advance")),
-      button("批量移入回收站", () => bulkAction("delete"), "secondary"));
+      button("批量移入回收站", () => bulkAction("delete"), "secondary danger"));
     const metrics = make("div", { className: "metric-grid" },
       metric("学生档案", String(data.students.length), "当前可管理的学生"),
       ...(me.role === "admin" ? [metric("辅导员", String(data.counselors.length), "已注册辅导员")] : []),
