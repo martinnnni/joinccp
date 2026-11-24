@@ -46,7 +46,7 @@ export function normalizedAttachment(file, forms = false) {
 }
 
 export const materialAccept = [...materialExtensions.map(ext => "." + ext), ...new Set(materialExtensions.map(ext => uploadType("." + ext).mime))].join(",");
-export const officeAccept = materialAccept + ",.xls,.xlsx,.csv,.txt";
+export const officeAccept = materialAccept + ",.xls,.xlsx,.csv,.txt,.zip";
 
 export async function matchesUploadType(file, type) {
   const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer());
