@@ -1,0 +1,29 @@
+cauc.pw {
+  encode zstd gzip
+  request_body {
+    max_size 35MB
+  }
+  tls {
+    key_type rsa2048
+  }
+  reverse_proxy 127.0.0.1:8787 {
+    header_up X-Real-IP {remote_host}
+  }
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+  }
+  log {
+    output file /var/log/caddy/joinccp-access.log {
+      roll_size 20MiB
+      roll_keep 5
+    }
+    format json
+  }
+}
+
+http:// {
+  respond "Invalid host" 421
+}

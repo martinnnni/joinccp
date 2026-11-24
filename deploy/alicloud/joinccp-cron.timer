@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CAUC reminder task every day
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=120
+Unit=joinccp-cron.service
+
+[Install]
+WantedBy=timers.target

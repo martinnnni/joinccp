@@ -12,6 +12,8 @@ public/ocr/
 .dev.vars
 .bootstrap-token
 .admin-credentials
+data/
+.env.production
 *.log
 .edge-mentor-qa*/
 mentor-desktop.png

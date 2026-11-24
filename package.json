@@ -4,11 +4,15 @@
   "type": "module",
   "scripts": {
     "build:knowledge": "node scripts/build-knowledge.mjs",
-    "build": "npm run build:knowledge && node scripts/build-pdf.mjs && node scripts/build-ocr.mjs && esbuild frontend/app.js --bundle --minify --format=esm --target=es2022 --external:/pdf.min.js --external:/ocr/tesseract.esm.min.js --outfile=public/app.js",
+    "build": "npm run build:knowledge && node scripts/build-pdf.mjs && node scripts/build-ocr.mjs && esbuild frontend/app.js --bundle --minify --format=iife --target=es2018 --external:/pdf.min.js --external:/ocr/tesseract.esm.min.js --outfile=public/app.js",
     "dev": "npm run build && wrangler dev",
     "check": "npm run build:knowledge && node --check rag.js && node --check worker.js && node --check frontend/app.js && node --check frontend/file-text.js && node --check frontend/roster.js && node --test tests/*.test.mjs && npm run build",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "start:server": "node --env-file-if-exists=.env.production server/index.mjs",
+    "run:cron": "node --env-file-if-exists=.env.production server/cron.mjs",
+    "import:d1": "node server/import-d1.mjs"
   },
+  "engines": { "node": ">=24" },
   "dependencies": {
     "@tesseract.js-data/chi_sim": "^1.0.0",
     "@tesseract.js-data/eng": "^1.0.0",
