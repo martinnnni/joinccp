@@ -1,93 +1,208 @@
-# 党员发展计划辅助系统 
+# 党员发展计划辅助系统
 
-**线上网站：**[joinccp.martinzhang.asia](https://joinccp.martinzhang.asia/) · [成长导师](https://joinccp.martinzhang.asia/#mentor)
+这是一个从真实校园工作里长出来的小项目。
 
-**协作发布：**从分支提出 Pull Request，GitHub 自动运行测试并请求仓库所有者审阅。所有者在 GitHub 批准后，把 PR 链接交给 Codex；Codex 核对批准记录与测试结果，再合并并部署到上述网站。操作细节见 [CONTRIBUTING.md](CONTRIBUTING.md)。Cloudflare 部署凭据仅保留在所有者本机，不写入 GitHub。
+党员发展要跨越多个阶段，学生常常记不住材料交到哪里，辅导员也很难从表格、聊天记录和文件夹里快速找出某个人的完整进度。我们想做的事情很朴素：把流程、材料、通知和日常答疑放进同一个地方，让学生少一点反复询问，也让辅导员少做一点机械整理。
 
-此目录将原 Django 项目改写为 Cloudflare Worker。原业务源码保存在 legacy/，未复制压缩包中的密钥文件、本机虚拟环境、工具源码和日志。
+项目目前由中国民航大学理学院学生独立开发，仍在持续打磨。它是工作辅助工具，不替代党组织的正式审核，也不把模型回答当作组织意见。
 
-页眉使用中国民航大学的校徽与校名题字图片；项目名称沿用原项目的“党员发展计划辅助系统”。当前界面借鉴开发者 martinzhang.asia 博客的大字号排版、细网格与轨道图形，保持白底。拉丁字形使用开源的 [Space Grotesk](https://github.com/floriankarsten/space-grotesk) 与 [DM Mono](https://github.com/googlefonts/dm-mono)，授权文本位于 `public/fonts/`。
+> 访问地址：[cauc.pw](https://cauc.pw/)
+>
+> 当前部署：中国内地阿里云北京节点，备案接入完成后开放公网访问
 
-当前界面使用 `public/site.css` 与成长导师专用的 `public/mentor.css`，设计原则记录于 `DESIGN.md`。旧版预览入口 `/design-preview.html` 会跳转到当前网站。
+![中国民航大学校园](public/campus-hero.webp)
 
-## 运行架构
+## 它现在能做什么
 
-- Worker：页面、认证和业务接口；静态文件来自 public/。
-- D1：账号、院系、流程、材料、质检结果、通知和院系表格目录。迁移中的流程种子数据由原项目 flow_data.py 生成。
-- 私有 R2：学生提交的 DOCX 与辅导员上传的表格；下载均经过登录及院系权限检查。
-- 定时任务：每天北京时间 09:00 生成临近截止通知。
-- 超级牛逼的办公助理：以“辅导员”或“超级管理员”身份登陆时，用户几乎不需要手动操作后台网站，可以通过唤起“办公助理”解决网站内的一切问题，为防止token滥用，功能暂时不向学生用户开放。
-- 成长导师：四份知识文件在构建时切成 25 个可检索片段；当前登录学生的档案与材料状态按需从 D1 实时组成专属检索片段。配置 DeepSeek Secret 后启用带来源的 AI 回答和 DOCX/PDF 文字检查。当前不使用原包中的密钥。
-- 资料下载：按五个培养阶段展示 21 份中国民航大学党委组织部公开附件的原始下载链接；管理员可上传全校通用表格，辅导员可上传本院系表格。公开附件可能早于现行要求，使用前须由辅导员核对。
+### 给学生
 
-## 本地运行
+- 查看自己的培养阶段、当前节点和材料清单。
+- 提交 Word、PDF 或图片材料，并保留历史版本。
+- 下载各阶段需要使用的表格。
+- 接收辅导员发送的站内通知。
+- 向成长导师询问流程、材料规范和系统使用方法。
+- 上传材料文字，让成长导师检查材料类型、填写规范和疑似错别字。
 
-1. 运行 npm ci。
-2. 创建 .dev.vars，分别设置至少 32 字符的 AUTH_PEPPER 和至少 24 字符的 BOOTSTRAP_TOKEN。两者均不可提交。
-3. 运行 npx wrangler d1 migrations apply joinccp-preview --local。
-4. 运行 npm run dev。
+### 给辅导员
 
-可在 `.dev.vars` 中额外设置 `DEEPSEEK_API_KEY` 测试 AI 回答；不设置时仍可验证知识库检索。
+- 从 Excel、Word 或 PDF 名单中识别姓名和学号，确认后批量建号。
+- 批量审阅材料、推进培养阶段、发送通知和维护学生信息。
+- 下载本专业学生提交的文件。
+- 上传本院系使用的表格。
+- 通过办公助理用自然语言规划后台操作，执行前仍需人工确认。
+- 查询每一步操作记录，出现误操作时可以追溯。
 
-访问 http://127.0.0.1:8787。首次打开“初始化管理员”页面，输入 BOOTSTRAP_TOKEN 并设置用户名密码。管理员在工作台创建院系、生成仅供辅导员使用的一次性邀请码。辅导员自定用户名注册后，在办公助理中选择“自动注册”，上传或粘贴入围名单，核对姓名与学号后批量创建本院系学生账号。学生首次以学号和 `cauc+学号` 登录，必须立即修改密码才能使用系统。专业、年级、联系电话和申请日期由辅导员在学生档案中维护。
+### 给管理员
 
-## 部署
+- 管理学院、专业、班级、辅导员和全校学生。
+- 批量创建辅导员、回收或恢复账号。
+- 查看全站操作日志和回收站。
+- 上传全校通用表格并维护业务基础数据。
 
-1. Cloudflare 账户须有 Workers、D1、R2 权限，且已开通 R2 订阅。wrangler.jsonc 中 D1 ID、R2 bucket 和 Custom Domain 指向本项目资源。
-2. 运行 npx wrangler d1 migrations apply joinccp-preview --remote。
-3. 运行 npx wrangler secret put AUTH_PEPPER 与 npx wrangler secret put BOOTSTRAP_TOKEN。
-4. 运行 npm run deploy。
+## 成长导师是怎么回答的
 
-## 阿里云服务器运行
+成长导师不是把所有问题直接丢给大模型。
 
-项目同时支持 Node.js 24 + SQLite 的普通 Linux 服务器运行方式。Cloudflare 版与服务器版共用 `worker.js`、前端和业务规则，服务器适配层位于 `server/`。
+一次提问会先经过意图判断，再决定是否查询知识库。业务问题会优先检索培养流程、材料规范、系统使用指南，以及当前登录学生有权限读取的个人档案。检索到依据时，回答会附带来源；找不到确切材料时，系统会明确说明知识缺口，不会把通用常识伪装成校内规定。
 
-服务器目录约定：
+当前时间问题由服务器时钟直接回答，不受知识库内容影响。模型身份问题由系统固定回答。辅导员和管理员使用的是独立的办公助理人格，学生无法调用后台执行工具。
 
-- 程序部署到 `/opt/joinccp/current`。
-- SQLite 数据库和私有上传文件放在 `/var/lib/joinccp`。
-- 密钥放在 `/etc/joinccp/environment`，权限设为 `600`，不得提交到 Git。
-- Caddy 监听 80/443 并把请求转发到 `127.0.0.1:8787`。
-- Caddy 使用 RSA 2048 证书以兼容微信内置浏览器和较旧 WebView；应用只接受 `ALLOWED_HOSTS` 中的访问地址。
-- 网关限制请求体、连接数和不同接口的来源 IP 频率；具体阈值位于 `/etc/joinccp/environment`，调整后重启 `joinccp.service`。
-- `joinccp-cron.timer` 每天北京时间 09:00 执行提醒和过期会话清理。
+知识库入口位于：
 
-部署文件在 `deploy/alicloud/`。安装 Node.js 24、Caddy 和 Git 后，执行：
+- `knowledge/`：共享流程、材料规范和使用指南。
+- `rag.js`：检索与知识片段组合。
+- `mentor-routing.js`：意图分类与回答分流。
+- `mentor-personal.js`：学生档案和材料状态的实时上下文。
+- `mentor-review.js`：文件识别与材料检查工作流。
 
-```bash
-sudo useradd --system --home /var/lib/joinccp --shell /usr/sbin/nologin joinccp
-sudo install -d -o joinccp -g joinccp -m 750 /var/lib/joinccp
-sudo install -d -o root -g joinccp -m 750 /etc/joinccp
-sudo install -m 600 deploy/alicloud/environment.example /etc/joinccp/environment
-sudo cp deploy/alicloud/joinccp.service deploy/alicloud/joinccp-cron.service /etc/systemd/system/
-sudo cp deploy/alicloud/joinccp-cron.timer /etc/systemd/system/
-sudo cp deploy/alicloud/Caddyfile /etc/caddy/Caddyfile
-sudo systemctl daemon-reload
-sudo systemctl enable --now caddy joinccp.service joinccp-cron.timer
+## 技术结构
+
+生产环境目前采用 Node.js 24、SQLite 和私有文件目录：
+
+```text
+浏览器
+  -> Caddy HTTPS
+  -> Node.js 适配层
+  -> Worker 业务逻辑
+  -> SQLite / 私有文件目录 / DeepSeek API
 ```
 
-首次迁移现有 Cloudflare 数据时，先导出 D1，再运行 `node server/import-d1.mjs <导出文件> /var/lib/joinccp/joinccp.sqlite`。根据数据库中的 `r2_key` 下载 R2 私有对象，并保持相同相对路径写入 `/var/lib/joinccp/files`。切换域名前应校验账号数、提交记录数、私有对象数和文件总字节数。为保留现有密码，服务器的 `AUTH_PEPPER` 必须与 Cloudflare 生产 Secret 完全一致。若原值已丢失，需要统一重置密码并强制用户首次登录修改。
-5. 打开 https://joinccp.martinzhang.asia，初始化管理员并建立受邀测试账号。
+Cloudflare Worker、D1 和 R2 版本仍然保留，方便在无服务器环境中运行。两种部署方式共用同一套 `worker.js`、前端页面和权限规则。
 
-成长导师使用 `knowledge/` 下四份 Markdown 作为共享测试知识库，另按登录身份读取本人档案和材料状态。更新知识文件后运行 `npm run build`，会重新生成 `knowledge.generated.js`。需要启用 AI 回答时，由管理员执行 `npx wrangler secret put DEEPSEEK_API_KEY`，在终端输入密钥；不要把密钥写入仓库。接口使用 DeepSeek Chat Completions 的 `deepseek-flash` 非思考模式，不设每日提问次数限制。测试版资料只作参考，校内要求应按学校和党组织现行文件核对。
+主要目录：
 
-### 成长导师路由
+```text
+frontend/           浏览器端交互源码
+public/             构建后的静态资源与响应式样式
+server/             Node.js、SQLite、私有文件适配层
+migrations/         数据库迁移
+knowledge/          RAG 共享知识文件
+tests/              权限、批量操作、RAG、上传与安全测试
+deploy/alicloud/    Caddy 与 systemd 部署配置
+legacy/             原 Django 项目，仅用于历史追溯
+```
 
-- `/api/mentor/chat` 先用 DeepSeek JSON 模式分类为 `business`、`chitchat`、`out_of_scope` 或 `uncertain`。分类失败视为 `uncertain`；身份问题由服务器固定回复。闲聊直接回答，无关问题说明服务范围，模糊问题只追问一次。
-- `business` 检索共享知识库；本人档案和材料问题还会读取当前登录学生的 D1 实时记录，系统操作问题检索《系统使用指南》。党务写作等开放问题可由模型直接回答，同时附上命中的相关知识片段。`rag.js` 计算 0–1 查询词覆盖度；业务检索最高值低于阈值时返回知识库缺口及人工/官方渠道，不调用回答模型。命中时回答附检索来源。
-- 当前时间类问题由 Worker 的 `getCurrentTime()` 读取北京时间后直接回答，不请求 RAG 或 DeepSeek。
-- `/api/mentor/review` 接收浏览器从 DOCX 或可搜索 PDF 提取的文字，先调用模型识别材料类型，再从《填写规范》与材料清单取依据，最后检查疑似错别字及填写内容问题。仅提交文字，不存储原文件；扫描版 PDF 和旧版 `.doc` 须先转换。最多 10 MB、30 页、20000 字；不能通过纯文字核实字体、版式和签章。
-- `wrangler.jsonc` 的 `RAG_MIN_SIMILARITY` 默认 `0.40`，改为 `0.50` 会更严格，改为 `0.30` 会更宽松；改动后运行 `npm run deploy`。`INTENT_MODEL` 是分类模型名。兜底话术和身份回复集中在 `mentor-config.js`。
-- `mentor_question_logs` D1 表记录时间、原问题、意图、最高相似度和走向。仅服务器写入，不提供公开查询接口；排查缺口可使用 `npx wrangler d1 execute joinccp-preview --remote --command "SELECT created_at,question,intent,top_similarity,outcome FROM mentor_question_logs ORDER BY id DESC LIMIT 50"`。原问题可能包含用户输入的个人信息，应限制数据库访问。
-- 运行 `npm run check` 执行路由、分类异常、权限和现有 RAG 测试。
+## 本地启动
 
-`official-forms.json` 记录学校组织部附件及来源页；这些文件仍由学校网站提供。新增院系表格经 `/api/forms` 上传到私有 R2，学生只看到通用表格及本院系表格。学生在“材料提交”页上传 DOCX 后，材料状态更新为“已交”；辅导员可在“已提交文件”和学生档案中下载所属院系学生的文件。
+需要 Node.js 24。
 
-上线后使用“修改密码”页轮换管理员密码。不要在聊天、日志或代码仓库中粘贴密码、邀请码、令牌或上传材料。
+```bash
+npm ci
+npm run check
+```
 
-## 权限与限制
+复制并填写服务器环境变量。密钥不要提交到 Git：
 
-- 仅辅导员可持有效邀请码注册；学生由本院系辅导员批量建号。学生只能读取自己的资料，辅导员只能读取同院系学生，管理员可管理全部院系。
-- 「材料提交」页的 DOCX 格式检查在浏览器中执行，提交文件及结果保存到 R2/D1。成长导师的文件检查只传输提取出的文字到 DeepSeek，不保存原文件。规则和模型提示不是组织审批意见。成长导师仅允许学生账号调用；AI 未配置时聊天接口拒绝请求，资料检索仍可使用。聊天记录只保留在当前页面内存，不写入 D1；本人档案查询和文件检查会向 DeepSeek 发送所需姓名、学号、材料状态或文件文字，不发送电话。日志仅记录问题或检查文件名，不记录文件正文。
-- Workers Free 每次请求 CPU 上限为 10 ms，D1 与 R2 有各自免费额度。管理员应在 Cloudflare 面板查看请求错误、D1 用量和 R2 用量；超额或 R2 订阅失效时上传可能失败。
-- legacy/ 的 Ubuntu、MySQL、Neo4j 和 Celery 部署文档仅供追溯，当前部署不使用这些服务。
+```bash
+cp deploy/alicloud/environment.example .env.production
+```
+
+至少设置：
+
+```dotenv
+AUTH_PEPPER=至少32位随机字符串
+BOOTSTRAP_TOKEN=仅首次初始化使用的随机令牌
+DEEPSEEK_API_KEY=可选
+```
+
+启动本地服务器：
+
+```bash
+npm run build
+npm run start:server
+```
+
+打开 `http://127.0.0.1:8787`。第一次运行时使用初始化令牌创建管理员。
+
+如果需要测试 Cloudflare 版本：
+
+```bash
+npx wrangler d1 migrations apply joinccp-preview --local
+npm run dev
+```
+
+## 账号规则
+
+- 学生由辅导员批量建号，不使用学生邀请码。
+- 学生用户名为学号，初始密码为 `cauc+学号`。
+- 首次登录必须修改密码，完成前不能进入其他业务页面。
+- 辅导员注册仍使用管理员生成的一次性邀请码。
+- 学生只能访问自己的档案和文件。
+- 辅导员只能管理所属专业的学生。
+- 管理员可以管理全部院系数据。
+
+## 文件与隐私
+
+- 学生材料保存在私有目录或私有 R2，不提供公开文件地址。
+- 下载接口会重新检查登录身份和院系权限。
+- 上传文件校验扩展名、文件头和大小，不能只靠文件名伪装类型。
+- 成长导师检查文件时只处理提取出的文字，不把原文件长期交给模型保存。
+- 聊天记录只保留在当前页面内存中。
+- 操作日志会记录操作者、目标、时间和结果，但不记录材料正文。
+
+请不要在 Issue、Pull Request、日志或聊天中粘贴密码、AccessKey、API Key、身份证号和真实学生材料。
+
+## 响应式设计
+
+页面以真实手机、平板和桌面端为目标，不依赖整页缩放。`public/responsive.css` 是最后加载的强制响应式层，同时处理正常移动视口和部分国产浏览器的桌面网页策略。
+
+重点验收尺寸：
+
+- 360 × 800，小屏安卓。
+- 390 × 844，主流手机。
+- 430 × 932，大屏手机。
+- 768 × 1024，竖屏平板。
+- 1366 × 768，常见笔记本。
+
+移动端的五阶段流程使用横向滑动，后台表格保留列结构并在自己的容器里滚动，成长导师使用完整的动态视口高度，避免地址栏和软键盘遮住输入框。
+
+## 部署到阿里云
+
+生产目录约定：
+
+- 程序版本：`/opt/joinccp/releases/`
+- 当前版本软链接：`/opt/joinccp/current`
+- SQLite 与私有文件：`/var/lib/joinccp`
+- 环境密钥：`/etc/joinccp/environment`
+- Caddy 配置：`/etc/caddy/Caddyfile`
+
+部署文件位于 `deploy/alicloud/`。服务使用独立的 `joinccp` 账号运行，systemd 限制文件系统、设备、内核能力和可用地址族。Caddy 负责 HTTPS、请求体限制和真实客户端地址传递。
+
+更新版本时不要覆盖 `/var/lib/joinccp`。先在新 release 中构建并完成健康检查，再原子切换 `current` 软链接。
+
+## 安全边界
+
+项目已经包含：
+
+- Host 白名单和可信代理地址覆盖。
+- 登录、AI、上传和普通接口的分级限流。
+- 请求体大小、连接数、头部时间和请求时间限制。
+- HttpOnly、Secure、SameSite 会话 Cookie。
+- 来源校验、CSP、私有下载鉴权和上传魔数检查。
+- 全量后台操作审计与账号回收站。
+- systemd 服务沙箱和最小权限运行账号。
+
+安全不是一次性开关。如果你发现权限绕过、隐私泄露或可利用漏洞，请不要公开真实数据或利用步骤，先通过仓库所有者的私下联系方式报告。
+
+## 一起修改
+
+这个项目很欢迎真正解决问题的改动。一个好的 PR 不需要很大，但需要说明三件事：你遇到了什么、为什么这样改、你怎么确认它没有破坏别的功能。
+
+开始前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。常规流程是：
+
+1. 从新分支开始修改。
+2. 运行 `npm run check`。
+3. 提交 Pull Request，写清测试设备和结果。
+4. 等待仓库所有者审核。
+5. 合并后由仓库所有者或 Codex 发布到生产环境。
+
+如果你只是发现手机上某个按钮被挡住，也完全值得提 Issue。最好附上手机型号、浏览器名称、系统版本和截图，这比一句“页面坏了”更容易定位。
+
+## 目前还在做的事
+
+- 完善真实材料样本下的文件识别和规范检查。
+- 继续压测辅导员批量操作与共享校园网络下的限流策略。
+- 补充不同安卓 WebView 和微信内置浏览器的回归测试。
+- 等待 `cauc.pw` 完成阿里云备案接入并恢复公网访问。
+
+这个仓库不会假装已经完成。能稳定帮到学生和辅导员的功能会留下，只有演示效果、没有实际价值的东西会继续被删掉。
