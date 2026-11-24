@@ -23,3 +23,7 @@ cauc.pw {
     format json
   }
 }
+
+http:// {
+  respond "Invalid host" 421
+}
