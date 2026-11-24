@@ -1,6 +1,14 @@
 cauc.pw {
   encode zstd gzip
-  reverse_proxy 127.0.0.1:8787
+  request_body {
+    max_size 35MB
+  }
+  tls {
+    key_type rsa2048
+  }
+  reverse_proxy 127.0.0.1:8787 {
+    header_up X-Real-IP {remote_host}
+  }
   header {
     Strict-Transport-Security "max-age=31536000; includeSubDomains"
     X-Content-Type-Options "nosniff"

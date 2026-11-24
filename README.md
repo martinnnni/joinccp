@@ -48,6 +48,8 @@
 - SQLite 数据库和私有上传文件放在 `/var/lib/joinccp`。
 - 密钥放在 `/etc/joinccp/environment`，权限设为 `600`，不得提交到 Git。
 - Caddy 监听 80/443 并把请求转发到 `127.0.0.1:8787`。
+- Caddy 使用 RSA 2048 证书以兼容微信内置浏览器和较旧 WebView；应用只接受 `ALLOWED_HOSTS` 中的访问地址。
+- 网关限制请求体、连接数和不同接口的来源 IP 频率；具体阈值位于 `/etc/joinccp/environment`，调整后重启 `joinccp.service`。
 - `joinccp-cron.timer` 每天北京时间 09:00 执行提醒和过期会话清理。
 
 部署文件在 `deploy/alicloud/`。安装 Node.js 24、Caddy 和 Git 后，执行：

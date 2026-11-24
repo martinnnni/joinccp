@@ -4,6 +4,16 @@ DATA_DIR=/var/lib/joinccp
 DATABASE_PATH=/var/lib/joinccp/joinccp.sqlite
 FILES_DIR=/var/lib/joinccp/files
 ASSETS_DIR=/opt/joinccp/current/public
+ALLOWED_HOSTS=cauc.pw,39.106.66.43,localhost,127.0.0.1
+MAX_BODY_BYTES=37748736
+MAX_CONNECTIONS=256
+# 下面是单个来源 IP 的网关限额；校内共享出口较多时可按监控结果上调。
+RATE_ASSET_PER_MINUTE=1200
+RATE_API_PER_MINUTE=600
+RATE_MUTATION_PER_MINUTE=300
+RATE_AUTH_PER_15_MINUTES=80
+RATE_AI_PER_MINUTE=60
+RATE_UPLOAD_PER_10_MINUTES=120
 AUTH_PEPPER=replace-with-the-existing-production-value
 BOOTSTRAP_TOKEN=replace-with-a-random-value
 DEEPSEEK_API_KEY=replace-with-the-api-key
