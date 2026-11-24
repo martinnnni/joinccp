@@ -238,14 +238,14 @@ body[data-surface=entry] .main { width: 100%; padding: 0; }
   inset: 0;
   z-index: -3;
   background: url('/campus-hero.webp') center 54% / cover no-repeat;
-  filter: saturate(1.12) contrast(1.02);
+  filter: saturate(.8);
 }
 .auth-story::before {
   content: '';
   position: absolute;
   inset: 0;
   z-index: -2;
-  background: linear-gradient(90deg, rgba(248, 246, 245, .97) 0%, rgba(248, 246, 245, .90) 36%, rgba(248, 246, 245, .62) 68%, rgba(248, 246, 245, .30) 100%);
+  background: linear-gradient(90deg, rgba(247, 249, 248, .97) 0%, rgba(247, 249, 248, .90) 36%, rgba(247, 249, 248, .62) 68%, rgba(247, 249, 248, .30) 100%);
 }
 /* 旧版轨道图形：简化后不再展示 */
 .orbit-field { display: none; }
@@ -724,7 +724,7 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
   .story-intro { margin-bottom: 16px; padding-bottom: 8px; font-size: 14px; }
   .auth-story-copy p { max-width: 100%; font-size: 16px; line-height: 1.6; }
   .auth-story::after { background-position: 68% center; }
-  .auth-story::before { background: linear-gradient(90deg, rgba(248,246,245,.94), rgba(248,246,245,.80) 58%, rgba(248,246,245,.56)); }
+  .auth-story::before { background: linear-gradient(90deg, rgba(247,249,248,.94), rgba(247,249,248,.80) 58%, rgba(247,249,248,.56)); }
   .stage-strip { padding: 14px 0 0; }
   .stage-strip li { flex: 1 1 0; min-width: 0; font-size: 10px; padding-inline: 3px; }
   .stage-strip li::before { width: 18px; height: 18px; margin-bottom: 6px; font-size: 9px; }
