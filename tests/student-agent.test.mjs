@@ -229,6 +229,45 @@ test("agent 请求归类到独立限流分类", () => {
   assert.equal(requestClass("/api/mentor/chat", "POST"), "ai");
 });
 
+test("prepare_upload 确认后把暂存文件落库为材料提交并清理暂存", async () => {
+  const fileRef = "f".repeat(32), planId = "a".repeat(32);
+  const payload = { type: "prepare_upload", file_ref: fileRef, material_id: 1, material_name: "入党申请书", filename: "申请书.docx" };
+  const planRow = { id: planId, user_id: 7, status: "pending", expires_at: "2999-01-01T00:00:00.000Z", payload_hash: "b".repeat(64), payload_json: JSON.stringify(payload) };
+  const batches = [], putKeys = [], deletedKeys = [];
+  const db = {
+    prepare(sql) { return {
+      sql, params: [], bind(...p) { this.params = p; return this; },
+      async first() {
+        if (sql.includes("FROM student_plans")) return planRow;
+        if (sql.includes("FROM agent_uploads")) return { file_ref: fileRef, user_id: 7, filename: "申请书.docx", r2_key: "agent-stage/7/xxx.docx" };
+        if (sql.includes("FROM materials")) return { id: 1 };
+        if (sql.includes("monitor_user_id")) return null;
+        return null;
+      },
+      async all() { return { results: [] }; },
+      async run() { return { meta: { changes: 1, last_row_id: 5 } }; }
+    }; },
+    async batch(statements) { batches.push(...statements); }
+  };
+  const env = {
+    DEEPSEEK_API_KEY: "k",
+    DB: db,
+    FILES: {
+      async get(key) { return { body: new Uint8Array([1, 2, 3]) }; },
+      async put(key) { putKeys.push(key); },
+      async delete(key) { deletedKeys.push(key); }
+    }
+  };
+  const response = await agentRoutes(request("/api/agent/execute", { planId, payloadHash: "b".repeat(64) }), env, "/api/agent/execute", student, {});
+  assert.equal(response.status, 200);
+  assert.ok(putKeys.some(key => key.startsWith("checks/7/")), "应将暂存文件移动到 checks 目录");
+  assert.ok(deletedKeys.includes("agent-stage/7/xxx.docx"), "应删除暂存文件");
+  assert.ok(batches.some(st => st.sql.includes("INSERT INTO checks")));
+  assert.ok(batches.some(st => st.sql.includes("INSERT INTO material_records")));
+  assert.ok(batches.some(st => st.sql.includes("DELETE FROM agent_uploads")));
+  assert.ok(batches.some(st => st.sql.includes("SET status='done'")));
+});
+
 test("定时清理删除过期的暂存文件记录与对应文件、过期未确认草案", async () => {
   const deletedKeys = [], statements = [];
   const env = {
