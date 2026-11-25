@@ -6,6 +6,7 @@ import { isPersonalQuestion, isSiteHelpQuestion, personalMatches, isSelfIdentity
 import { identifyMessages, parseIdentification, reviewMessages, parseReview, formatReview } from "./mentor-review.js";
 import { isCurrentTimeQuestion, getCurrentTime } from "./mentor-time.js";
 import { officeMessages, parseOfficePlan } from "./office-agent.js";
+import { FORM_SCHEMA, redactPhone, looksLikeActionRequest, isAccountDeletionRequest, isProxyRequest, studentActionMessages, parseStudentAction } from "./mentor-actions.js";
 
 const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), {
   status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...extra }
@@ -1479,6 +1480,200 @@ export async function officeRoutes(request, env, path, user, audit = {}) {
   return null;
 }
 
+function agentActionsEnabled(env) {
+  return !!env.DEEPSEEK_API_KEY && String(env.AGENT_ACTIONS_ENABLED ?? "true").trim().toLowerCase() !== "false";
+}
+function assertSameOrigin(request) {
+  const origin = request.headers.get("origin");
+  assert(origin && origin === new URL(request.url).origin, "请求来源无效", 403);
+}
+const AGENT_MAX_ACTIONS = 6;
+async function countConversationActions(env, userId, conversationId) {
+  const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM student_agent_actions WHERE conversation_id=? AND user_id=?").bind(conversationId, userId).first();
+  return row?.n ?? 0;
+}
+async function recordConversationAction(env, userId, conversationId, type) {
+  await env.DB.prepare("INSERT INTO student_agent_actions(user_id,conversation_id,action_type) VALUES(?,?,?)").bind(userId, conversationId, type).run();
+}
+async function readSection(env, user, section) {
+  if (section === "profile") {
+    const [stage, node] = await Promise.all([
+      env.DB.prepare("SELECT name FROM stages WHERE slug=?").bind(user.current_stage_slug).first(),
+      env.DB.prepare("SELECT name FROM nodes WHERE slug=?").bind(user.current_node_slug).first()
+    ]);
+    return "我的档案：姓名 " + (user.name || "未填") + "，学号 " + (user.student_no || "未填") + "，学院 " + (user.college_name || "未填") + "，专业 " + (user.major_name || "未填") + "，班级 " + (user.class_name || "未填") + "，当前阶段「" + (stage?.name || "未设置") + "」，当前节点「" + (node?.name || "未设置") + "」，联系电话 " + (user.phone ? redactPhone(user.phone) : "未填") + "。";
+  }
+  if (section === "materials") {
+    const rows = await env.DB.prepare("SELECT m.name,r.status FROM materials m LEFT JOIN material_records r ON r.material_id=m.id AND r.student_id=? WHERE m.stage_slug=? ORDER BY m.id").bind(user.id, user.current_stage_slug).all();
+    const results = rows.results;
+    const missing = results.filter(row => row.status !== "已交" && row.status !== "已通过");
+    const done = results.filter(row => row.status === "已交" || row.status === "已通过");
+    return "我的材料状态（当前阶段）：共 " + results.length + " 项，已交/已通过 " + done.length + " 项，未交 " + missing.length + " 项" + (missing.length ? "：" + missing.map(row => row.name).join("、") : "") + "。";
+  }
+  if (section === "notifications") {
+    const rows = await env.DB.prepare("SELECT title,is_read FROM notifications WHERE student_id=? ORDER BY created_at DESC LIMIT 10").bind(user.id).all();
+    return rows.results.length ? "最近通知（" + rows.results.length + " 条）：" + rows.results.map(row => (row.is_read ? "[已读]" : "[未读]") + row.title).join("；") + "。" : "通知中心暂无通知。";
+  }
+  return "站内未找到该摘要。";
+}
+async function normalizeStudentAction(env, user, action) {
+  if (action.type === "prepare_submit") {
+    const schema = FORM_SCHEMA[action.form];
+    return { type: action.type, form: action.form, fields: action.fields, preview: "将更新你的" + schema.title + "：联系电话 " + redactPhone(action.fields.phone) + "。" };
+  }
+  if (action.type === "prepare_upload") {
+    const material = await env.DB.prepare("SELECT id,name FROM materials WHERE name=?").bind(action.material).first();
+    assert(material, "材料不存在：" + action.material, 404);
+    const upload = await env.DB.prepare("SELECT r2_key,filename FROM agent_uploads WHERE file_ref=? AND user_id=? AND expires_at>?").bind(action.file_ref, user.id, iso()).first();
+    assert(upload, "文件暂存已失效，请在页面重新选择文件", 409);
+    return { type: action.type, file_ref: action.file_ref, material_id: material.id, material_name: material.name, filename: upload.filename, preview: "将把你选择的文件「" + upload.filename + "」提交为材料「" + material.name + "」。" };
+  }
+  throw new HttpError(400, "不支持的操作");
+}
+async function saveStudentPlan(env, user, conversationId, payload) {
+  const planId = randomHex(16);
+  const payloadHash = await sha256(JSON.stringify(payload));
+  await env.DB.prepare("INSERT INTO student_plans(id,user_id,conversation_id,action_type,payload_json,payload_hash,preview,expires_at) VALUES(?,?,?,?,?,?,?,?)")
+    .bind(planId, user.id, conversationId, payload.type, JSON.stringify(payload), payloadHash, payload.preview, new Date(Date.now() + 15 * 60000).toISOString()).run();
+  return { id: planId, type: payload.type, preview: payload.preview, payloadHash, expiresInMinutes: 15 };
+}
+export async function agentRoutes(request, env, path, user, audit = {}) {
+  if (!path.startsWith("/api/agent/")) return null;
+  assert(user, "请先登录", 401);
+  assert(user.role === "student", "仅学生可使用站内操作", 403);
+  if (path === "/api/agent/plan" && request.method === "POST") {
+    if (!agentActionsEnabled(env)) return json({ ok: true, deferred: true, answer: null, action: null, plan: null });
+    const data = await bodyJson(request);
+    const question = clean(data.question, 500), documentText = clean(data.documentText, 25000);
+    const files = Array.isArray(data.files) ? data.files.slice(0, 11).map(item => ({ name: clean(item?.name, 150), ref: /^[a-f0-9]{32}$/.test(String(item?.ref ?? "")) ? String(item.ref) : "" })) : [];
+    const history = Array.isArray(data.history) ? data.history.slice(-6) : [];
+    const conversationId = clean(data.conversationId, 64) || randomHex(16);
+    assert(question || documentText || files.length, "请描述任务");
+    if (isAccountDeletionRequest(question)) {
+      audit.action = "agent_reject"; audit.targets = "account_deletion";
+      return json({ ok: true, answer: "账号注销由辅导员或管理员处理，请直接联系你的辅导员。", action: null, plan: null });
+    }
+    if (isProxyRequest(question)) {
+      audit.action = "agent_reject"; audit.targets = "proxy_request";
+      return json({ ok: true, answer: "我只能为当前登录的你自己操作，不能代其他同学操作。请让对方登录自己的账号，或联系辅导员。", action: null, plan: null });
+    }
+    if (isIdentityQuestion(question) || isCurrentTimeQuestion(question) || !looksLikeActionRequest(question)) {
+      return json({ ok: true, deferred: true, answer: null, action: null, plan: null });
+    }
+    if (await countConversationActions(env, user.id, conversationId) >= AGENT_MAX_ACTIONS) {
+      audit.action = "agent_reject"; audit.targets = "action_limit";
+      return json({ ok: true, answer: "本次对话的站内操作已达上限（" + AGENT_MAX_ACTIONS + " 次），请开启新对话继续，或直接在页面操作。", action: null, plan: null });
+    }
+    const sections = { profile: await readSection(env, user, "profile"), materials: await readSection(env, user, "materials") };
+    const references = retrieve(question).filter(item => item.similarity >= mentorConfig(env).similarityThreshold).slice(0, 3);
+    const raw = await deepSeekContent(env, { model: "deepseek-flash", messages: studentActionMessages(question, { documentText, files, history, references, sections }), response_format: { type: "json_object" }, reasoning_effort: "none", stream: false, max_tokens: 900, temperature: 0.1 });
+    let parsed;
+    try { parsed = parseStudentAction(raw); }
+    catch (error) { audit.action = "agent_reject"; audit.targets = "parse"; return json({ ok: true, answer: error.message + "。请补充信息后重试。", action: null, plan: null }); }
+    if (!parsed.action) { audit.action = "agent_answer"; return json({ ok: true, answer: parsed.reply, action: null, plan: null }); }
+    const action = parsed.action;
+    if (action.type === "navigate") {
+      await recordConversationAction(env, user.id, conversationId, action.type);
+      audit.action = "agent_navigate"; audit.targets = action.route;
+      return json({ ok: true, answer: parsed.reply, action: { type: "navigate", route: action.route }, plan: null });
+    }
+    if (action.type === "read_summary") {
+      await recordConversationAction(env, user.id, conversationId, action.type);
+      audit.action = "agent_read_summary"; audit.targets = action.section;
+      return json({ ok: true, answer: await readSection(env, user, action.section), action: { type: "read_summary", section: action.section }, plan: null });
+    }
+    if (action.type === "fill_field") {
+      await recordConversationAction(env, user.id, conversationId, action.type);
+      audit.action = "agent_fill_field"; audit.targets = action.form + "." + action.field;
+      const schema = FORM_SCHEMA[action.form];
+      return json({ ok: true, answer: schema.fields[action.field].label + "已填写：" + schema.fields[action.field].redact(action.value) + "。", action: { type: "fill_field", form: action.form, field: action.field, value: action.value }, plan: null });
+    }
+    let normalized;
+    try { normalized = await normalizeStudentAction(env, user, action); }
+    catch (error) {
+      if (error instanceof HttpError) { audit.action = "agent_reject"; audit.targets = "normalize"; return json({ ok: true, answer: error.message + "。请补充后重试。", action: null, plan: null }); }
+      throw error;
+    }
+    const plan = await saveStudentPlan(env, user, conversationId, normalized);
+    await recordConversationAction(env, user.id, conversationId, action.type);
+    audit.action = "agent_draft"; audit.targets = action.type + " plan:" + plan.id;
+    return json({ ok: true, answer: parsed.reply, action: { type: action.type }, plan });
+  }
+  if (path === "/api/agent/execute" && request.method === "POST") {
+    assert(agentActionsEnabled(env), "站内操作已关闭", 403);
+    assertSameOrigin(request);
+    const data = await bodyJson(request);
+    const planId = clean(data.planId, 32), payloadHash = clean(data.payloadHash, 64);
+    assert(validHex(planId, 32), "操作编号无效");
+    const row = await env.DB.prepare("SELECT * FROM student_plans WHERE id=?").bind(planId).first();
+    assert(row && row.user_id === user.id, "操作不存在或不属于你", 404);
+    assert(row.status === "pending" && row.expires_at > iso(), "操作已执行或已过期，请重新提出", 409);
+    assert(validHex(payloadHash, 64) && equal(payloadHash, row.payload_hash), "操作内容已变化，请重新确认", 409);
+    const locked = await env.DB.prepare("UPDATE student_plans SET status='running' WHERE id=? AND user_id=? AND status='pending'").bind(planId, user.id).run();
+    assert(locked.meta.changes === 1, "操作已在执行中", 409);
+    const plan = JSON.parse(row.payload_json);
+    audit.action = "agent_execute"; audit.targets = plan.type + " plan:" + planId;
+    try {
+      if (plan.type === "prepare_submit") {
+        const schema = FORM_SCHEMA[plan.form];
+        const phone = String(plan.fields?.phone ?? "");
+        assert(schema?.fields?.phone?.validate(phone), "联系电话格式已失效", 409);
+        await env.DB.batch([
+          env.DB.prepare("UPDATE profiles SET phone=? WHERE user_id=?").bind(phone, user.id),
+          env.DB.prepare("UPDATE student_plans SET status='done',result_json=? WHERE id=?").bind(JSON.stringify({ ok: true }), planId)
+        ]);
+        return json({ ok: true, message: "已更新你的联系电话为 " + redactPhone(phone) + "。" });
+      }
+      if (plan.type === "prepare_upload") {
+        const upload = await env.DB.prepare("SELECT * FROM agent_uploads WHERE file_ref=? AND user_id=?").bind(plan.file_ref, user.id).first();
+        assert(upload, "文件暂存已失效，请重新选择", 409);
+        const material = await env.DB.prepare("SELECT id FROM materials WHERE id=?").bind(plan.material_id).first();
+        assert(material, "材料不存在", 404);
+        const object = await env.FILES.get(upload.r2_key);
+        assert(object, "文件不存在", 404);
+        const type = uploadType(upload.filename);
+        assert(type, "文件类型不支持", 409);
+        const cls = await env.DB.prepare("SELECT cl.monitor_user_id FROM classes cl JOIN users m ON m.id=cl.monitor_user_id AND m.deleted_at IS NULL WHERE cl.id=?").bind(user.class_id || 0).first();
+        const monitorApproved = cls?.monitor_user_id ? 0 : 1;
+        const key = "checks/" + user.id + "/" + randomHex(16) + "." + upload.filename.split(".").at(-1).toLowerCase();
+        await env.FILES.put(key, object.body, { httpMetadata: { contentType: type.mime } });
+        try {
+          await env.DB.batch([
+            env.DB.prepare("INSERT INTO checks(student_id,material_id,r2_key,filename,monitor_approved) VALUES(?,?,?,?,?)").bind(user.id, plan.material_id, key, upload.filename, monitorApproved),
+            env.DB.prepare("INSERT INTO material_records(student_id,material_id,status,r2_key,filename,submitted_at) VALUES(?,?,'已交',?,?,?) ON CONFLICT(student_id,material_id) DO UPDATE SET status='已交',r2_key=excluded.r2_key,filename=excluded.filename,submitted_at=excluded.submitted_at").bind(user.id, plan.material_id, key, upload.filename, iso()),
+            env.DB.prepare("DELETE FROM agent_uploads WHERE file_ref=?").bind(plan.file_ref),
+            env.DB.prepare("UPDATE student_plans SET status='done',result_json=? WHERE id=?").bind(JSON.stringify({ ok: true }), planId)
+          ]);
+        } catch (error) { await env.FILES.delete(key); throw error; }
+        await env.FILES.delete(upload.r2_key);
+        return json({ ok: true, message: "已将「" + upload.filename + "」提交为材料「" + plan.material_name + "」，可在材料提交页查看。" });
+      }
+      throw new HttpError(400, "不支持的操作");
+    } catch (error) {
+      await env.DB.prepare("UPDATE student_plans SET status='pending' WHERE id=? AND status='running'").bind(planId).run();
+      throw error;
+    }
+  }
+  if (path === "/api/agent/upload" && request.method === "POST") {
+    assert(agentActionsEnabled(env), "站内操作已关闭", 403);
+    assertSameOrigin(request);
+    const form = await request.formData();
+    const file = form.get("file");
+    assert(file && typeof file.arrayBuffer === "function", "请选择文件");
+    const filename = clean(file.name, 150), type = uploadType(filename);
+    assert(type && file.size > 0 && file.size <= maxFileBytes, "仅支持不超过 10 MB 的 Word、PDF 或图片");
+    assert(await matchesUploadType(file, type), "文件内容与扩展名不符");
+    const fileRef = randomHex(16);
+    const key = "agent-stage/" + user.id + "/" + fileRef + "." + type.ext;
+    await env.FILES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: type.mime } });
+    await env.DB.prepare("INSERT INTO agent_uploads(file_ref,user_id,filename,r2_key,expires_at) VALUES(?,?,?,?,?)")
+      .bind(fileRef, user.id, filename, key, new Date(Date.now() + 15 * 60000).toISOString()).run();
+    audit.action = "agent_upload_stage"; audit.targets = "ref:" + fileRef;
+    return json({ ok: true, file_ref: fileRef, filename });
+  }
+  return null;
+}
+
 async function scheduled(env) {
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   await env.DB.prepare("INSERT OR IGNORE INTO notifications(student_id,kind,title,content,node_slug) SELECT p.user_id,'deadline','节点提醒：' || n.name,'您当前处于「' || n.name || '」节点，时间要求：' || COALESCE(NULLIF(n.duration_rule,''),'请按计划推进') || '。请及时准备相关材料。',n.slug FROM profiles p JOIN nodes n ON n.slug=p.current_node_slug WHERE EXISTS (SELECT 1 FROM users u WHERE u.id=p.user_id AND u.deleted_at IS NULL) AND p.node_entered_at IS NOT NULL AND n.duration_days>0 AND n.remind_days_before>0 AND date(p.node_entered_at,'+' || (n.duration_days-n.remind_days_before) || ' days')<=date(?)")
@@ -1511,6 +1706,7 @@ async function handleRequest(request, env, audit) {
       }
       response = await managementRecords(request, env, path, user)
         || await officeRoutes(request, env, path, user, audit)
+        || await agentRoutes(request, env, path, user, audit)
         || await mentorRoutes(request, env, path, user)
         || await studentRoutes(request, env, path, user)
         || await checkRoutes(request, env, path, user, audit)

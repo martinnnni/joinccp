@@ -13,6 +13,7 @@ let me = null;
 let config = null;
 let mentorHistory = [];
 let mentorEpoch = 0;
+let mentorConversationId = "";
 const make = (tag, props = {}, ...children) => {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
@@ -28,6 +29,7 @@ const make = (tag, props = {}, ...children) => {
   return node;
 };
 const mentorTitle = () => (me && (me.role === "counselor" || me.role === "admin")) ? "办公助理" : "成长导师";
+const agentRouteLabel = route => ({ profile: "我的档案", forms: "资料下载", check: "材料提交", notifications: "通知中心" })[route] || route;
 const mentorErrorText = (code, message) => "错误代码 " + code + "：" + message + "。请将错误代码报告给你的导员和支持部门。";
 const renderMarkdown = src => {
   const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -641,6 +643,7 @@ function mentorPage() {
     };
     const reset = () => {
       mentorHistory = []; officeHistory = []; pendingOfficePlan = null; pendingOfficeButton = null; userReading = false;
+      mentorConversationId = randomHex(16);
       log.replaceChildren(empty);
       textarea.value = ""; clearFile(); textarea.focus();
     };
@@ -791,28 +794,40 @@ function mentorPage() {
       const history = mentorHistory.slice(-6);
       userReading = false;
       if (log.contains(empty)) empty.remove();
-      const displayQuestion = file ? "检查文件：" + file.name + (question ? "\n" + question : "") : question;
+      const submitIntent = /(提交|上传|交|归档|递交)/.test(question) && /(材料|文件|申请书|附件|思想汇报|自传|表)/.test(question);
+      const displayQuestion = file ? (submitIntent ? "提交文件" : "检查文件") + "：" + file.name + (question ? "\n" + question : "") : question;
       appendMessage({ role: "user", content: displayQuestion });
-      const loading = appendMessage({ role: "assistant", content: file ? "正在读取文档文字…" : status.enabled ? "正在思考…" : "正在检索…" });
+      const loading = appendMessage({ role: "assistant", content: file ? (submitIntent ? "正在准备提交…" : "正在读取文档文字…") : status.enabled ? "正在思考…" : "正在检索…" });
       playGirlTyping();
       textarea.value = ""; textarea.blur(); resize(); scrollEnd();
       try {
         let result;
         if (file) {
-          const text = await extractReviewText(file);
-          loading.querySelector(".mentor-message").textContent = "正在识别表单并核对填写规范…";
-          result = await post("/api/mentor/review", { filename: file.name, text });
-          clearFile();
-        } else result = await post(status.enabled ? "/api/mentor/chat" : "/api/mentor/retrieve", { question, history });
+          if (submitIntent && status.enabled) {
+            const stageForm = new FormData();
+            stageForm.append("file", file, file.name);
+            const staged = await uploadWithProgress("/api/agent/upload", stageForm, loading.querySelector(".mentor-bubble") || loading);
+            result = await post("/api/agent/plan", { question, files: [{ name: file.name, ref: staged.file_ref }], conversationId: mentorConversationId ||= randomHex(16) });
+            clearFile();
+          } else {
+            const text = await extractReviewText(file);
+            loading.querySelector(".mentor-message").textContent = "正在识别表单并核对填写规范…";
+            result = await post("/api/mentor/review", { filename: file.name, text });
+            clearFile();
+          }
+        } else {
+          result = await post(status.enabled ? "/api/agent/plan" : "/api/mentor/retrieve", status.enabled ? { question, history, conversationId: mentorConversationId ||= randomHex(16) } : { question, history });
+          if (status.enabled && result.deferred) result = await post("/api/mentor/chat", { question, history });
+        }
         if (!alive()) return;
         loading.remove();
         if (status.enabled || file) {
-          mentorHistory.push({ role: "user", content: displayQuestion }, { role: "assistant", content: result.answer, route: result.route, sources: result.sources || [] });
+          mentorHistory.push({ role: "user", content: displayQuestion }, { role: "assistant", content: result.answer || "", route: result.route, sources: result.sources || [] });
           const row = appendMessage({ role: "assistant", content: "", sources: result.sources });
           const msg = row.querySelector(".mentor-message");
           focusReplyTop(row);
           // 先按 markdown 渲染成最终排版，再逐字回填渲染后的文本，避免用户看到原始 markdown 符号
-          msg.innerHTML = renderMarkdown(result.answer);
+          msg.innerHTML = renderMarkdown(result.answer || "");
           const pending = [];
           const walker = document.createTreeWalker(msg, NodeFilter.SHOW_TEXT);
           let node;
@@ -830,6 +845,29 @@ function mentorPage() {
             }
           }
           focusReplyTop(row);
+          if (result.action?.type === "navigate") {
+            row.querySelector(".mentor-bubble").append(button("打开「" + agentRouteLabel(result.action.route) + "」", () => { closeMentor(); location.hash = result.action.route; }, "btn"));
+          }
+          if (result.plan) {
+            const confirm = button("确认执行", async () => {
+              if (confirm.disabled) return;
+              confirm.disabled = true;
+              const progress = appendMessage({ role: "assistant", content: "正在执行已确认的操作…" });
+              const releaseExecution = busy(form);
+              attach.disabled = true; playGirlTyping(); scrollEnd();
+              try {
+                const outcome = await post("/api/agent/execute", { planId: result.plan.id, payloadHash: result.plan.payloadHash });
+                if (!alive()) return;
+                progress.remove();
+                focusReplyTop(appendMessage({ role: "assistant", content: outcome.message }));
+              } catch (error) {
+                progress.remove();
+                confirm.disabled = false;
+                focusReplyTop(appendMessage({ role: "assistant", content: "执行未完成：" + error.message + "。请核对后重试。" }));
+              } finally { playGirlBack(); releaseExecution(); attach.disabled = false; }
+            }, "btn");
+            row.querySelector(".mentor-bubble").append(make("div", { className: "mentor-plan-preview" }, p(result.plan.preview)), confirm);
+          }
         } else {
           mentorHistory.push({ role: "user", content: displayQuestion });
           focusReplyTop(appendMessage({ role: "assistant", content: result.sources?.length ? "找到以下相关资料：" : "目前没有找到相关资料，请换个更具体的问法。", sources: result.sources }));

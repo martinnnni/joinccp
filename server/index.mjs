@@ -16,6 +16,7 @@ const rateLimits = {
   mutation: new FixedWindowLimiter({ limit: Number(process.env.RATE_MUTATION_PER_MINUTE || 300), windowMs: 60000 }),
   auth: new FixedWindowLimiter({ limit: Number(process.env.RATE_AUTH_PER_15_MINUTES || 80), windowMs: 15 * 60000 }),
   ai: new FixedWindowLimiter({ limit: Number(process.env.RATE_AI_PER_MINUTE || 60), windowMs: 60000 }),
+  agent: new FixedWindowLimiter({ limit: Number(process.env.RATE_AGENT_PER_MINUTE || 20), windowMs: 60000 }),
   upload: new FixedWindowLimiter({ limit: Number(process.env.RATE_UPLOAD_PER_10_MINUTES || 120), windowMs: 10 * 60000 })
 };
 

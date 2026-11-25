@@ -62,6 +62,7 @@ export class FixedWindowLimiter {
 export function requestClass(pathname, method) {
   if (["/api/login", "/api/auth/challenge", "/api/register", "/api/bootstrap"].includes(pathname)) return "auth";
   if (pathname.startsWith("/api/mentor/") || pathname.startsWith("/api/office/")) return "ai";
+  if (pathname.startsWith("/api/agent/")) return "agent";
   if (method !== "GET" && method !== "HEAD" && (pathname === "/api/checks" || pathname === "/api/forms" || pathname === "/api/office/execute")) return "upload";
   if (pathname.startsWith("/api/")) return method === "GET" || method === "HEAD" ? "api" : "mutation";
   return "asset";
