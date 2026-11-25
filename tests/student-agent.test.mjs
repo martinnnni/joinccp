@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { parseStudentAction, studentActionMessages, looksLikeActionRequest, isAccountDeletionRequest, isProxyRequest, redactPhone, NAVIGABLE_ROUTES, READABLE_SECTIONS, FORM_SCHEMA } from "../mentor-actions.js";
-import { agentRoutes } from "../worker.js";
+import { agentRoutes, cleanupAgentArtifacts } from "../worker.js";
 import { requestClass } from "../server/security.mjs";
 
 const request = (path, data, origin = "https://example.test") => new Request("https://example.test" + path, {
@@ -227,4 +227,22 @@ test("agent 请求归类到独立限流分类", () => {
   assert.equal(requestClass("/api/agent/plan", "POST"), "agent");
   assert.equal(requestClass("/api/agent/execute", "POST"), "agent");
   assert.equal(requestClass("/api/mentor/chat", "POST"), "ai");
+});
+
+test("定时清理删除过期的暂存文件记录与对应文件、过期未确认草案", async () => {
+  const deletedKeys = [], statements = [];
+  const env = {
+    DB: {
+      prepare(sql) { return {
+        sql, params: [], bind(...p) { this.params = p; return this; },
+        async all() { return { results: [{ r2_key: "agent-stage/7/aaa.docx" }, { r2_key: "agent-stage/7/bbb.pdf" }] }; },
+        async run() { statements.push(sql); return { meta: { changes: 1 } }; }
+      }; }
+    },
+    FILES: { async delete(key) { deletedKeys.push(key); } }
+  };
+  await cleanupAgentArtifacts(env);
+  assert.deepEqual(deletedKeys, ["agent-stage/7/aaa.docx", "agent-stage/7/bbb.pdf"]);
+  assert.ok(statements.some(sql => sql.includes("DELETE FROM agent_uploads WHERE expires_at<")));
+  assert.ok(statements.some(sql => sql.includes("DELETE FROM student_plans WHERE expires_at<")));
 });

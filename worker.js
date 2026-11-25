@@ -1666,8 +1666,10 @@ export async function agentRoutes(request, env, path, user, audit = {}) {
     const fileRef = randomHex(16);
     const key = "agent-stage/" + user.id + "/" + fileRef + "." + type.ext;
     await env.FILES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: type.mime } });
-    await env.DB.prepare("INSERT INTO agent_uploads(file_ref,user_id,filename,r2_key,expires_at) VALUES(?,?,?,?,?)")
-      .bind(fileRef, user.id, filename, key, new Date(Date.now() + 15 * 60000).toISOString()).run();
+    try {
+      await env.DB.prepare("INSERT INTO agent_uploads(file_ref,user_id,filename,r2_key,expires_at) VALUES(?,?,?,?,?)")
+        .bind(fileRef, user.id, filename, key, new Date(Date.now() + 15 * 60000).toISOString()).run();
+    } catch (error) { await env.FILES.delete(key); throw error; }
     audit.action = "agent_upload_stage"; audit.targets = "ref:" + fileRef;
     return json({ ok: true, file_ref: fileRef, filename });
   }
@@ -1680,6 +1682,15 @@ async function scheduled(env) {
     .bind(today).run();
   await env.DB.prepare("DELETE FROM sessions WHERE expires_at<?").bind(iso()).run();
   await env.DB.prepare("DELETE FROM login_attempts WHERE reset_at<?").bind(iso()).run();
+  await cleanupAgentArtifacts(env);
+}
+
+// 清理学生站内操作产生的过期暂存文件与过期未确认草案，防止孤儿文件累积。
+export async function cleanupAgentArtifacts(env) {
+  const expiredUploads = await env.DB.prepare("SELECT r2_key FROM agent_uploads WHERE expires_at<?").bind(iso()).all();
+  await Promise.all(expiredUploads.results.map(row => env.FILES.delete(row.r2_key).catch(() => {})));
+  await env.DB.prepare("DELETE FROM agent_uploads WHERE expires_at<?").bind(iso()).run();
+  await env.DB.prepare("DELETE FROM student_plans WHERE expires_at<? AND status='pending'").bind(iso()).run();
 }
 
 async function handleRequest(request, env, audit) {
