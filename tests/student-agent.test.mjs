@@ -214,7 +214,9 @@ test("动作白名单与表单 schema 校验", () => {
   assert.equal(FORM_SCHEMA.contact.fields.phone.validate("12345"), false);
   assert.equal(redactPhone("13800138000"), "138****8000");
   assert.equal(looksLikeActionRequest("打开材料提交页"), true);
+  assert.equal(looksLikeActionRequest("把我的联系电话更新为 13800138000"), true);
   assert.equal(looksLikeActionRequest("入党申请书如何组织结构"), false);
+  assert.equal(looksLikeActionRequest("帮我同学提交入党申请书"), true); // 会被代操作边界拦截
   assert.equal(isAccountDeletionRequest("注销账号"), true);
   assert.equal(isProxyRequest("帮同学提交"), true);
   assert.throws(() => parseStudentAction(JSON.stringify({ reply: "x", action: { type: "delete_database" } })), /不支持/);
