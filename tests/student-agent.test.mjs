@@ -215,6 +215,8 @@ test("动作白名单与表单 schema 校验", () => {
   assert.equal(redactPhone("13800138000"), "138****8000");
   assert.equal(looksLikeActionRequest("打开材料提交页"), true);
   assert.equal(looksLikeActionRequest("把我的联系电话更新为 13800138000"), true);
+  assert.equal(looksLikeActionRequest("我现在应该交什么材料"), false); // 疑问句，回归 M-106
+  assert.equal(looksLikeActionRequest("我该交哪些材料"), false);
   assert.equal(looksLikeActionRequest("入党申请书如何组织结构"), false);
   assert.equal(looksLikeActionRequest("帮我同学提交入党申请书"), true); // 会被代操作边界拦截
   assert.equal(isAccountDeletionRequest("注销账号"), true);

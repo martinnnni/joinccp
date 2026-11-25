@@ -43,6 +43,9 @@ export function redactPhone(value) {
 // 确定性意图判断：是否像“站内操作”请求。只在明显是操作时才走规划模型，纯问答直接交给问答端点。
 export function looksLikeActionRequest(question) {
   const value = String(question);
+  // 询问信息（什么/哪些/怎么/如何/哪里/为什么）属于问答，不走动作规划，
+  // 否则会误路由到 JSON 规划模型，规划模型对纯问答返回空内容 → M-106。
+  if (/(?:什么|哪些|怎么|如何|哪里|为什么|为啥)/.test(value)) return false;
   const verb = "(?:打开|进入|跳转|切换到?|去)";
   const contactVerb = "(?:填写|修改|更新|设置|补充|改成|改为|变更为)";
   const contact = "(?:电话|手机号|联系方式|号码)";
