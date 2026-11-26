@@ -70,6 +70,19 @@
   --shadow-red: 0 4px 16px rgba(165, 31, 45, .30);
 }
 
+/* ---------- 骨架屏（先轮廓后内容） ---------- */
+.skeleton { position: relative; overflow: hidden; border-radius: var(--r-md); background: var(--soft); }
+.skeleton::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .65), transparent);
+  transform: translateX(-100%);
+  animation: skeleton-shimmer 1.3s infinite;
+}
+@keyframes skeleton-shimmer { to { transform: translateX(100%); } }
+.skeleton-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--s-4); margin-bottom: var(--s-5); }
+.skeleton-card { height: 84px; }
+.skeleton-block { height: 220px; margin-bottom: var(--s-5); }
+
 /* ---------- 基础 ---------- */
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }

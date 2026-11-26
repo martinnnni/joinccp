@@ -206,6 +206,7 @@ function recordActivity(event) {
   if (me && !me.must_change_password) post("/api/activity", { event }).catch(() => {});
 }
 let lastVisitedPage;
+let pendingScroll = null;
 function navigate(page) { location.hash = page; render(); }
 function nav() {
   navigation.replaceChildren();
@@ -275,6 +276,8 @@ function notificationPopup(unread) {
   dialog.showModal();
 }
 function render() {
+  const prevPage = document.body.dataset.page;
+  const scrollY = window.scrollY;
   document.body.dataset.surface = me ? "workspace" : "entry";
   document.body.dataset.role = me?.role || "guest";
   const fabLabel = document.querySelector("#mentorFab .mentor-fab-label");
@@ -302,6 +305,8 @@ function render() {
     root.prepend(make("p", { className: "form-feedback operation-result", role: "status", "data-kind": "success", text: operationFeedback }));
     operationFeedback = "";
   }
+  pendingScroll = prevPage === page ? scrollY : null;
+  if (pendingScroll !== null) window.scrollTo(0, pendingScroll);
 }
 function accountForm(title, includeInvite = false, includeBootstrap = false) {
   const registrationFields = includeInvite ? make("div", { className: "form-grid" },
@@ -1537,12 +1542,19 @@ function hierarchyPage() {
   return shell;
 }
 
+function adminSkeleton() {
+  return make("div", { "aria-hidden": "true" },
+    make("div", { className: "skeleton-stats" }, [1, 2, 3, 4].map(() => make("div", { className: "skeleton skeleton-card" }))),
+    make("div", { className: "skeleton skeleton-block" }),
+    make("div", { className: "skeleton skeleton-block" }));
+}
+
 function adminPage() {
   const adminTitle = make("h1", { className: "page-title" },
     make("span", { text: me.role === "admin" ? "管理员工作台" : "辅导员工作台" }),
     make("span", { className: "greeting-title", text: " | " + dayPart() + "好，您辛苦了！" }));
   const adminCode = me.role === "admin" ? "ADMIN / CONSOLE" : "COUNSELOR / CONSOLE";
-  const shell = make("div", { className: "view view-admin" }, pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"), notice("正在读取数据…"));
+  const shell = make("div", { className: "view view-admin" }, pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"), adminSkeleton());
   (async () => { try {
     const filters = new URLSearchParams(location.search);
     const data = await api("/api/admin/dashboard?" + filters);
@@ -1762,6 +1774,7 @@ function adminPage() {
         }, "secondary") : null,
         data.students.length ? bulkTools : null,
         data.students.length ? tableWrap(students) : make("div", { className: "empty-state" }, make("strong", { text: "尚无学生" }), "打开办公助理上传入围名单，或在上方手动添加。")));
+    if (pendingScroll !== null) { window.scrollTo(0, pendingScroll); pendingScroll = null; }
   } catch (error) { shell.replaceChildren(pageHead(adminCode, adminTitle), notice(error.message, "error")); } })();
   return shell;
 }
