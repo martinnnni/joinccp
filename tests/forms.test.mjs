@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import worker, { adminRoutes, checkRoutes, formRoutes } from "../worker.js";
 
 const student = { id: 7, role: "student", department_id: 2, class_id: 2 };
-const counselor = { id: 8, role: "counselor", department_id: 2, major_id: 2 };
+const counselor = { id: 8, role: "counselor", department_id: 2, grade_id: 2 };
 const foreignForm = { department_id: 3, filename: "表格.pdf", r2_key: "forms/3/sample.pdf" };
 
 function fakeEnv({ form = foreignForm, studentDepartment = 3 } = {}) {
@@ -17,7 +17,7 @@ function fakeEnv({ form = foreignForm, studentDepartment = 3 } = {}) {
           if (sql.includes("FROM form_templates WHERE id=")) return form;
           if (sql.includes("FROM stages WHERE slug=")) return { slug: args[0] };
           if (sql.includes("FROM users u JOIN profiles")) return { id: args[0], class_id: 2, major_id: studentDepartment, name: "测试学生" };
-          if (sql.includes("FROM users u LEFT JOIN classes")) return { major_id: studentDepartment };
+          if (sql.includes("FROM users u LEFT JOIN classes")) return { grade_id: studentDepartment };
           return null;
         },
         async all() {

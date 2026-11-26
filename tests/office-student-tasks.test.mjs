@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import worker, { checkRoutes, officeRoutes } from "../worker.js";
 
-const counselor = { id: 8, role: "counselor", major_id: 2 };
+const counselor = { id: 8, role: "counselor", grade_id: 2 };
 const admin = { id: 1, role: "admin" };
 const migrations = new URL("../migrations/", import.meta.url);
 
@@ -46,11 +46,12 @@ function setup(t) {
   };
   db.exec(`
     INSERT INTO departments(id,name) VALUES(2,'甲院'),(3,'乙院');
-    INSERT INTO majors(id,college_id,name) VALUES(2,2,'甲专业'),(3,3,'乙专业');
+    INSERT INTO grades(id,college_id,name) VALUES(2,2,'甲年级'),(3,3,'乙年级');
+    INSERT INTO majors(id,college_id,grade_id,name) VALUES(2,2,2,'甲专业'),(3,3,3,'乙专业');
     INSERT INTO classes(id,major_id,name) VALUES(2,2,'甲一班'),(3,3,'乙一班');
-    INSERT INTO users(id,username,password_salt,password_verifier,role,department_id,major_id,class_id) VALUES
-      (1,'admin-test','','','admin',NULL,NULL,NULL),(8,'staff-test','','','counselor',2,2,NULL),
-      (11,'100011','','','student',2,NULL,2),(12,'100012','','','student',2,NULL,2),(13,'100013','','','student',3,NULL,3);
+    INSERT INTO users(id,username,password_salt,password_verifier,role,department_id,major_id,class_id,grade_id) VALUES
+      (1,'admin-test','','','admin',NULL,NULL,NULL,NULL),(8,'staff-test','','','counselor',2,NULL,NULL,2),
+      (11,'100011','','','student',2,NULL,2,NULL),(12,'100012','','','student',2,NULL,2,NULL),(13,'100013','','','student',3,NULL,3,NULL);
     INSERT INTO profiles(user_id,name,student_no,grade) VALUES
       (11,'测试甲','100011','2026'),(12,'测试乙','100012','2026'),(13,'测试丙','100013','2026');
   `);
@@ -120,13 +121,16 @@ test("管理员新增学院和生成邀请码，辅导员仅能查询本专业�
   const college = (await plan({ type: "create_department", name: "新学院" }, admin)).plan;
   await execute(college, admin);
   const { id: collegeId } = db.prepare("SELECT id FROM departments WHERE name='新学院'").get();
-  const major = (await plan({ type: "create_major", collegeId, name: "新专业" }, admin)).plan;
+  const grade = (await plan({ type: "create_grade", collegeId, name: "新年级" }, admin)).plan;
+  await execute(grade, admin);
+  const { id: gradeId } = db.prepare("SELECT id FROM grades WHERE name='新年级'").get();
+  const major = (await plan({ type: "create_major", gradeId, name: "新专业" }, admin)).plan;
   await execute(major, admin);
   const { id: majorId } = db.prepare("SELECT id FROM majors WHERE name='新专业'").get();
-  const invites = (await plan({ type: "create_invites", majorId, count: 2 }, admin)).plan;
+  const invites = (await plan({ type: "create_invites", gradeId, count: 2 }, admin)).plan;
   const output = await (await execute(invites, admin)).json();
   assert.equal(output.count, 2);
-  assert.equal(db.prepare("SELECT count(*) AS n FROM invites WHERE major_id=? AND role='counselor'").get(majorId).n, 2);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM invites WHERE grade_id=? AND role='counselor'").get(gradeId).n, 2);
 });
 
 test("对话确认后推进培养阶段、审阅最新材料并通知学生", async t => {

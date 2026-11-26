@@ -5,7 +5,7 @@ import worker, { adminRoutes } from "../worker.js";
 import { parseRosterText, readStructuredStudentRoster } from "../frontend/roster.js";
 
 const pepper = "t".repeat(40);
-const counselor = { id: 8, role: "counselor", major_id: 2 };
+const counselor = { id: 8, role: "counselor", grade_id: 2 };
 const admin = { id: 1, role: "admin", department_id: null };
 const secret = value => createHmac("sha256", pepper).update(value).digest("hex");
 const request = (path, data) => new Request("https://example.test" + path, {
@@ -24,7 +24,7 @@ test("仅本院系辅导员可确认批量建号；数据库批次包含用户�
     prepare(sql) { return {
       sql, params: [], bind(...params) { this.params = params; return this; },
       async first() {
-        if (sql.includes("FROM classes WHERE id=")) return { id: 2, major_id: 2 };
+        if (sql.includes("FROM classes c LEFT JOIN majors")) return { id: 2, major_id: 2, grade_id: 2 };
         if (sql.includes("SELECT college_id FROM majors")) return { college_id: 1 };
         return null;
       },

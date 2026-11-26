@@ -10,11 +10,12 @@ const operations = {
   review_materials: ["{rows:[{student,materialName}],status,note?}，状态为 已通过/退回修改，退回时必须填写理由。用户明确要求审阅才生成计划，不替用户判断是否通过", "rows", ["status", "note"]],
   list_students: ["{students:[{student}]} 或 {audience:{classId?,majorId?,stageSlug?,grade?}} 或 {}。用于查看可管理的学生和培养阶段", null, ["students", "audience"]],
   list_submissions: ["{student?,pendingOnly?}，查看已提交材料，pendingOnly 为布尔值，true 时只看待审阅记录。可指定具体学生", null, ["student", "pendingOnly"]],
-  register_counselors: ["{majorId,counselors:[{name,username}]}", "counselors", ["majorId"], true],
+  register_counselors: ["{gradeId,counselors:[{name,username}]}", "counselors", ["gradeId"], true],
   delete_counselors: ["{counselors:[{username}]}，仅在用户明确要求删除时规划，必须提供确切用户名", "counselors", [], true],
-  create_invites: ["{majorId,count}，为指定专业生成辅导员邀请码", null, ["majorId", "count"], true],
+  create_invites: ["{gradeId,count}，为指定年级生成辅导员邀请码", null, ["gradeId", "count"], true],
   create_department: ["{name}，新增学院", null, ["name"], true],
-  create_major: ["{collegeId,name}，新增专业", null, ["collegeId", "name"], true],
+  create_grade: ["{collegeId,name}，新增年级", null, ["collegeId", "name"], true],
+  create_major: ["{gradeId,name}，新增专业", null, ["gradeId", "name"], true],
   create_class: ["{majorId,name}，新增班级", null, ["majorId", "name"]],
   set_monitor: ["{classId,student}，将该学生设为学生管理员", null, ["classId", "student"]]
 };

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { adminRoutes } from "../worker.js";
 import { parseCounselorRoster } from "../frontend/roster.js";
 
-const counselor = { id: 8, role: "counselor", major_id: 2 };
+const counselor = { id: 8, role: "counselor", grade_id: 2 };
 const admin = { id: 1, role: "admin" };
 const request = (path, data) => new Request("https://example.test" + path, {
   method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data)
@@ -17,8 +17,9 @@ function makeEnv({ existingUser = false, counselorRows = [] } = {}) {
         sql, params: [],
         bind(...params) { this.params = params; return this; },
         async first() {
-          if (sql.includes("FROM classes WHERE id=")) return { id: Number(this.params[0]), major_id: 2 };
-          if (sql.includes("FROM majors WHERE id=")) return { id: Number(this.params[0]), college_id: 1 };
+          if (sql.includes("FROM classes c LEFT JOIN majors")) return { id: Number(this.params[0]), major_id: 2, grade_id: 2 };
+          if (sql.includes("SELECT college_id FROM majors")) return { college_id: 1 };
+          if (sql.includes("FROM grades WHERE id=")) return { id: Number(this.params[0]), college_id: 1 };
           if (sql.includes("FROM users WHERE username=")) return existingUser ? { id: 99 } : null;
           return null;
         },
@@ -65,9 +66,9 @@ test("手动添加学生校验姓名学号与重复学号", async () => {
 });
 
 test("仅管理员可手动添加辅导员，辅导员被拒绝", async () => {
-  await assert.rejects(adminRoutes(request("/api/admin/counselors", { name: "王老师", username: "wanglaoshi", majorId: 2 }), makeEnv().env, "/api/admin/counselors", counselor), { status: 403 });
+  await assert.rejects(adminRoutes(request("/api/admin/counselors", { name: "王老师", username: "wanglaoshi", gradeId: 2 }), makeEnv().env, "/api/admin/counselors", counselor), { status: 403 });
   const { env, runs } = makeEnv();
-  const res = await adminRoutes(request("/api/admin/counselors", { name: "王老师", username: "wanglaoshi", majorId: 2 }), env, "/api/admin/counselors", admin);
+  const res = await adminRoutes(request("/api/admin/counselors", { name: "王老师", username: "wanglaoshi", gradeId: 2 }), env, "/api/admin/counselors", admin);
   assert.equal(res.status, 201);
   assert.match(runs[0].sql, /INSERT INTO users/);
   assert.match(runs[0].sql, /'counselor'/);
@@ -77,12 +78,12 @@ test("仅管理员可手动添加辅导员，辅导员被拒绝", async () => {
 
 test("管理员可批量添加辅导员到指定专业", async () => {
   const { env, batches } = makeEnv();
-  const res = await adminRoutes(request("/api/admin/counselors/auto-register", { majorId: 2, counselors: [{ name: "王老师", username: "wang1" }, { name: "赵老师", username: "zhao1" }] }), env, "/api/admin/counselors/auto-register", admin);
+  const res = await adminRoutes(request("/api/admin/counselors/auto-register", { gradeId: 2, counselors: [{ name: "王老师", username: "wang1" }, { name: "赵老师", username: "zhao1" }] }), env, "/api/admin/counselors/auto-register", admin);
   const data = await res.json();
   assert.equal(data.count, 2);
   assert.equal(batches[0].length, 2);
   assert.match(batches[0][0].sql, /INSERT INTO users/);
-  await assert.rejects(adminRoutes(request("/api/admin/counselors/auto-register", { majorId: 2, counselors: [{ name: "王老师", username: "wang1" }] }), env, "/api/admin/counselors/auto-register", counselor), { status: 403 });
+  await assert.rejects(adminRoutes(request("/api/admin/counselors/auto-register", { gradeId: 2, counselors: [{ name: "王老师", username: "wang1" }] }), env, "/api/admin/counselors/auto-register", counselor), { status: 403 });
 });
 
 test("仅管理员可移除辅导员，上传表格仍保留", async () => {

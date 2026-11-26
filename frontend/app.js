@@ -1487,32 +1487,41 @@ function hierarchyPage() {
     const data = await api("/api/admin/hierarchy");
     const badge = (label, cls) => make("span", { className: "badge " + cls, text: label });
     const tree = make("div", { className: "hierarchy" });
-    for (const major of data.majors) {
-      const classTotal = major.classes.reduce((n, c) => n + c.students.length, 0);
-      const majorNode = make("details", { className: "hierarchy-major", open: "" },
+    for (const grade of data.grades) {
+      const majorTotal = grade.majors.reduce((n, m) => n + m.classes.length, 0);
+      const studentTotal = grade.majors.reduce((n, m) => n + m.classes.reduce((n2, c) => n2 + c.students.length, 0), 0);
+      const gradeNode = make("details", { className: "hierarchy-grade", open: "" },
         make("summary", {},
-          make("strong", { text: major.name }),
-          make("span", { className: "small muted", text: (major.college_name ? major.college_name + " · " : "") + major.classes.length + " 个班 · " + classTotal + " 人" })));
-      for (const cls of major.classes) {
-        const classNode = make("details", { className: "hierarchy-class" },
+          make("strong", { text: grade.name }),
+          make("span", { className: "small muted", text: (grade.college_name ? grade.college_name + " · " : "") + grade.majors.length + " 个专业 · " + majorTotal + " 个班 · " + studentTotal + " 人" })));
+      for (const major of grade.majors) {
+        const classTotal = major.classes.reduce((n, c) => n + c.students.length, 0);
+        const majorNode = make("details", { className: "hierarchy-major" },
           make("summary", {},
-            make("span", { className: "hierarchy-class-name", text: cls.name }),
-            make("span", { className: "small muted", text: cls.students.length + " 人" }),
-            cls.monitor ? make("span", { className: "small", text: "学生管理员：" + cls.monitor.name }) : make("span", { className: "small muted", text: "未设学生管理员" })));
-        const list = make("ul", { className: "hierarchy-students" });
-        for (const s of cls.students) {
-          const tag = s.is_monitor ? badge("学生管理员", "monitor") : s.is_archived ? badge("已归档党员", "done") : badge("发展中", "developing");
-          list.append(make("li", { className: (s.is_monitor ? "is-monitor" : "") + (s.is_archived ? " is-archived" : "") },
-            make("span", { className: "hierarchy-student-name", text: s.name }),
-            make("span", { className: "small muted", text: s.student_no + (s.stage_name ? " · " + s.stage_name : "") }), tag));
+            make("span", { className: "hierarchy-major-name", text: major.name }),
+            make("span", { className: "small muted", text: major.classes.length + " 个班 · " + classTotal + " 人" })));
+        for (const cls of major.classes) {
+          const classNode = make("details", { className: "hierarchy-class" },
+            make("summary", {},
+              make("span", { className: "hierarchy-class-name", text: cls.name }),
+              make("span", { className: "small muted", text: cls.students.length + " 人" }),
+              cls.monitor ? make("span", { className: "small", text: "学生管理员：" + cls.monitor.name }) : make("span", { className: "small muted", text: "未设学生管理员" })));
+          const list = make("ul", { className: "hierarchy-students" });
+          for (const s of cls.students) {
+            const tag = s.is_monitor ? badge("学生管理员", "monitor") : s.is_archived ? badge("已归档党员", "done") : badge("发展中", "developing");
+            list.append(make("li", { className: (s.is_monitor ? "is-monitor" : "") + (s.is_archived ? " is-archived" : "") },
+              make("span", { className: "hierarchy-student-name", text: s.name }),
+              make("span", { className: "small muted", text: s.student_no + (s.stage_name ? " · " + s.stage_name : "") }), tag));
+          }
+          if (!cls.students.length) list.append(make("li", { className: "small muted", text: "暂无学生" }));
+          classNode.append(list);
+          majorNode.append(classNode);
         }
-        if (!cls.students.length) list.append(make("li", { className: "small muted", text: "暂无学生" }));
-        classNode.append(list);
-        majorNode.append(classNode);
+        gradeNode.append(majorNode);
       }
-      tree.append(majorNode);
+      tree.append(gradeNode);
     }
-    if (!data.majors.length) tree.append(make("div", { className: "empty-state" }, "暂无可管理的专业。"));
+    if (!data.grades.length) tree.append(make("div", { className: "empty-state" }, "暂无可管理的年级。"));
     shell.replaceChildren(pageHead("STAFF / ORG", "管理体系", "查看各专业、班级与学生的培养状态，学生管理员置顶。"), tree);
   } catch (error) { shell.replaceChildren(pageHead("STAFF / ORG", "管理体系"), notice(error.message, "error")); } })();
   return shell;
@@ -1526,11 +1535,15 @@ function adminPage() {
     const filters = new URLSearchParams(location.search);
     const data = await api("/api/admin/dashboard?" + filters);
     const collegeChoices = data.colleges.map(x => [x.id, x.name]);
-    const majorLabel = id => (data.majors.find(m => m.id === id)?.name || "") + " · " + (data.colleges.find(c => c.id === (data.majors.find(m => m.id === id)?.college_id))?.name || "");
+    const gradeChoices = data.grades.map(x => [x.id, x.name]);
+    const gradeName = id => (data.grades.find(g => g.id === id)?.name || "");
+    const majorLabel = id => (data.majors.find(m => m.id === id)?.name || "") + " · " + gradeName(data.majors.find(m => m.id === id)?.grade_id);
     const majorChoices = data.majors.map(x => [x.id, majorLabel(x.id)]);
-    const visibleClasses = me.role === "admin" ? data.classes : data.classes.filter(c => c.major_id === me.major_id);
+    const gradeMajorIds = new Set(me.role === "admin" ? data.majors.map(m => m.id) : data.majors.filter(m => m.grade_id === me.grade_id).map(m => m.id));
+    const visibleClasses = me.role === "admin" ? data.classes : data.classes.filter(c => gradeMajorIds.has(c.major_id));
     const classChoices = visibleClasses.map(x => [x.id, (data.majors.find(m => m.id === x.major_id)?.name || "") + " · " + x.name]);
     const needCollege = me.role === "admin" && collegeChoices.length === 0;
+    const needGrade = me.role === "admin" && gradeChoices.length === 0;
     const needMajor = me.role === "admin" && majorChoices.length === 0;
     const searchForm = make("form", { className: "inline-form" },
       field("检索学生（姓名或学号）", "q", "text", false, new URLSearchParams(location.search).get("q") || ""),
@@ -1543,7 +1556,7 @@ function adminPage() {
       history.replaceState(null, "", url); render();
     });
     const inviteForm = make("form", { className: "inline-form" },
-      select("专业", "majorId", majorChoices, majorChoices[0]?.[0]),
+      select("年级", "gradeId", gradeChoices, gradeChoices[0]?.[0]),
       select("角色", "role", [["counselor", "辅导员"]]),
       field("邀请数量（1–50）", "count", "number", true, "1"),
       make("button", { className: "btn", type: "submit", text: "生成邀请码" }));
@@ -1568,8 +1581,16 @@ function adminPage() {
       try { await post("/api/admin/departments", formData(collegeForm)); render(); }
       catch (error) { feedback(collegeForm, error.message); }
     });
-    const majorForm = make("form", { className: "inline-form" },
+    const gradeForm = make("form", { className: "inline-form" },
       select("所属学院", "collegeId", collegeChoices, collegeChoices[0]?.[0]),
+      field("新年级名称（如 23级）", "name"), make("button", { className: "btn", type: "submit", text: "添加年级" }));
+    gradeForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      try { await post("/api/admin/grades", formData(gradeForm)); render(); }
+      catch (error) { feedback(gradeForm, error.message); }
+    });
+    const majorForm = make("form", { className: "inline-form" },
+      select("所属年级", "gradeId", gradeChoices, gradeChoices[0]?.[0]),
       field("新专业名称", "name"), make("button", { className: "btn", type: "submit", text: "添加专业" }));
     majorForm.addEventListener("submit", async event => {
       event.preventDefault();
@@ -1577,7 +1598,7 @@ function adminPage() {
       catch (error) { feedback(majorForm, error.message); }
     });
     const classForm = make("form", { className: "inline-form" },
-      select("所属专业", "majorId", me.role === "admin" ? majorChoices : [[me.major_id, majorLabel(me.major_id)]], me.role === "admin" ? majorChoices[0]?.[0] : me.major_id),
+      select("所属专业", "majorId", me.role === "admin" ? majorChoices : data.majors.filter(m => m.grade_id === me.grade_id).map(m => [m.id, majorLabel(m.id)]), me.role === "admin" ? majorChoices[0]?.[0] : (data.majors.filter(m => m.grade_id === me.grade_id)[0]?.id)),
       field("新班级名称", "name"), make("button", { className: "btn", type: "submit", text: "添加班级" }));
     classForm.addEventListener("submit", async event => {
       event.preventDefault();
@@ -1596,9 +1617,9 @@ function adminPage() {
       catch (error) { feedback(addStudentForm, error.message); }
       finally { release(); }
     });
-    const addCounselorForm = (me.role === "admin" && majorChoices.length) ? make("form", { className: "inline-form" },
+    const addCounselorForm = (me.role === "admin" && gradeChoices.length) ? make("form", { className: "inline-form" },
       field("姓名", "name"), field("用户名", "username", "text"),
-      select("专业", "majorId", majorChoices, majorChoices[0]?.[0]),
+      select("年级", "gradeId", gradeChoices, gradeChoices[0]?.[0]),
       make("button", { className: "btn", type: "submit", text: "添加辅导员" })) : null;
     if (addCounselorForm) addCounselorForm.addEventListener("submit", async event => {
       event.preventDefault();
@@ -1625,7 +1646,7 @@ function adminPage() {
           studentCount.textContent = "已选 " + selectedStudents.size + " 人";
         } })),
         make("td", { text: student.student_no }), make("td", { text: student.name }),
-        make("td", { text: (student.major_name ? student.major_name + " · " : "") + (student.class_name || "未分班") }),
+        make("td", { text: (student.grade_name ? student.grade_name + " · " : "") + (student.major_name ? student.major_name + " · " : "") + (student.class_name || "未分班") }),
         make("td", { text: data.nodes.find(x => x.slug === student.current_node_slug)?.name || "" }),
         make("td", {}, button("管理", () => showStudent(student, data), "secondary"),
           button("设学生管理员", () => setMonitor(student, data.classes.find(c => c.id === student.class_id)), "secondary"),
@@ -1635,11 +1656,11 @@ function adminPage() {
             catch (error) { feedback(shell, error.message); }
           }, "secondary"))))));
     const counselorsTable = make("table", { className: "data" },
-      make("thead", {}, make("tr", {}, ["姓名", "用户名", "专业", "操作"].map(x => make("th", { text: x })))),
+      make("thead", {}, make("tr", {}, ["姓名", "用户名", "年级", "操作"].map(x => make("th", { text: x })))),
       make("tbody", {}, data.counselors.map(counselor => make("tr", {},
         make("td", { text: counselor.name || "—" }),
         make("td", { text: counselor.username }),
-        make("td", { text: counselor.major_name || "未分配" }),
+        make("td", { text: counselor.grade_name || "未分配" }),
         make("td", {}, button("移入回收站", async () => {
           if (!await actionDialog("移入回收站", (counselor.name || counselor.username) + " 将无法登录。可在回收站恢复账号。", "移入回收站")) return;
           try { await post("/api/admin/counselors/bulk-delete", { usernames: [counselor.username] }); render(); }
@@ -1661,12 +1682,12 @@ function adminPage() {
     const metrics = make("div", { className: "metric-grid" },
       metric("学生档案", String(data.students.length), "当前可管理的学生"),
       ...(me.role === "admin" ? [metric("辅导员", String(data.counselors.length), "已注册辅导员")] : []),
-      metric("班级", String(visibleClasses.length), me.role === "admin" ? "全部班级" : "本专业班级"),
-      ...(me.role === "admin" ? [metric("专业", String(data.majors.length), "已配置专业"), metric("学院", String(data.colleges.length), "已配置学院")] : []),
+      metric("班级", String(visibleClasses.length), me.role === "admin" ? "全部班级" : "本年级班级"),
+      ...(me.role === "admin" ? [metric("专业", String(data.majors.length), "已配置专业"), metric("年级", String(data.grades.length), "已配置年级"), metric("学院", String(data.colleges.length), "已配置学院")] : []),
       ...(me.role === "admin" ? [metric("有效邀请", String(data.invites.filter(x => x.role === "counselor" && !x.used_by && new Date(x.expires_at) > new Date()).length), "未使用的辅导员邀请码", true)] : []));
     const notifyTargets = [
       ...(me.role === "counselor"
-        ? [["major:" + me.major_id, "本专业全部学生"]]
+        ? data.majors.filter(m => m.grade_id === me.grade_id).map(m => ["major:" + m.id, "专业 · " + m.name])
         : data.majors.map(m => ["major:" + m.id, "专业 · " + m.name])),
       ...visibleClasses.map(c => ["class:" + c.id, "班级 · " + c.name])
     ];
@@ -1693,7 +1714,7 @@ function adminPage() {
       panel(make("div", { className: "panel-head" }, make("h2", { text: "检索学生" })), searchForm),
       ...(addStudentForm ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "手动添加学生" }), make("span", { className: "small", text: "单独添加一名学生到班级，初始密码 cauc+学号。" })), addStudentForm)] : []),
       ...(me.role === "admin" ? [
-        ...(addCounselorForm ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "手动添加辅导员" }), make("span", { className: "small", text: "单独添加一名辅导员到专业，初始密码 cauc+用户名。" })), addCounselorForm)] : []),
+        ...(addCounselorForm ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "手动添加辅导员" }), make("span", { className: "small", text: "单独添加一名辅导员到年级，初始密码 cauc+用户名。" })), addCounselorForm)] : []),
         panel(make("div", { className: "panel-head" }, make("h2", { text: "辅导员管理" }), make("span", { className: "small", text: "共 " + data.counselors.length + " 人 · 批量增删请用右下角办公助理" })),
           data.counselors.length ? tableWrap(counselorsTable) : make("div", { className: "empty-state" }, make("strong", { text: "尚无辅导员" }), "可手动添加，或打开办公助理批量添加。"))
       ] : []),
@@ -1717,7 +1738,7 @@ function adminPage() {
               }, "secondary")));
           })))) : null),
       ...(me.role === "admin" ? [
-        ...(!needCollege ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "学院与专业设置" })), collegeForm, majorForm)] : [panel(make("div", { className: "panel-head" }, make("h2", { text: "学院与专业设置" })), collegeForm)]),
+        panel(make("div", { className: "panel-head" }, make("h2", { text: "学院、年级与专业设置" })), collegeForm, ...(collegeChoices.length ? [gradeForm] : []), ...(gradeChoices.length ? [majorForm] : [])),
         ...(!needMajor ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "邀请辅导员" })), inviteForm, inviteOutput)] : [])
       ] : []),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "学生档案" }), make("span", { className: "small", text: "共 " + data.students.length + " 人" })),
@@ -1733,11 +1754,11 @@ function adminPage() {
   return shell;
 }
 function showStudent(student, data) {
-  const orgLine = [student.college_name, student.major_name, student.class_name].filter(Boolean).join(" · ") || "未分配学院/专业/班级";
+  const orgLine = [student.college_name, student.grade_name, student.major_name, student.class_name].filter(Boolean).join(" · ") || "未分配学院/年级/专业/班级";
   const wrap = make("div", { className: "view view-student-detail" },
     pageHead("STAFF / STUDENT PROFILE", student.name + "的档案", "学号 " + student.student_no + " · " + orgLine),
     button("← 返回工作台", () => navigate("admin"), "secondary"));
-  const classChoices = (me.role === "admin" ? data.classes : data.classes.filter(c => c.major_id === me.major_id)).map(x => [x.id, (data.majors.find(m => m.id === x.major_id)?.name || "") + " · " + x.name]);
+  const classChoices = (me.role === "admin" ? data.classes : data.classes.filter(c => (data.majors.find(m => m.id === c.major_id)?.grade_id) === me.grade_id)).map(x => [x.id, (data.majors.find(m => m.id === x.major_id)?.name || "") + " · " + x.name]);
   const profileForm = make("form", { className: "form-grid" },
     select("班级", "classId", classChoices, student.class_id),
     field("年级", "grade", "text", false, student.grade || ""),

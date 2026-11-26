@@ -153,6 +153,7 @@ export function applyMigrations(database, migrationsDirectory = join(root, "migr
   )`);
   const applied = new Set(database.prepare("SELECT name FROM d1_migrations").all().map(row => row.name));
   const migrations = readdirSync(migrationsDirectory).filter(name => /^\d+.*\.sql$/.test(name)).sort();
+  database.exec("PRAGMA foreign_keys=OFF");
   for (const name of migrations) {
     if (applied.has(name)) continue;
     const sql = readFileSync(join(migrationsDirectory, name), "utf8");
@@ -166,6 +167,7 @@ export function applyMigrations(database, migrationsDirectory = join(root, "migr
       throw new Error(`迁移 ${name} 失败`, { cause: error });
     }
   }
+  database.exec("PRAGMA foreign_keys=ON");
 }
 
 export function createRuntime() {
