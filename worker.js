@@ -727,7 +727,7 @@ async function deleteCounselors(env, user, data, expectedIds = null) {
 }
 
 async function advanceStudents(env, user, data, approved = null, finish = null) {
-  const ids = selectedIds(data.studentIds);
+  const ids = selectedIds(data.studentIds, 500);
   const stages = (await env.DB.prepare("SELECT slug,name FROM stages ORDER BY position").all()).results;
   const students = await Promise.all(ids.map(studentId => targetStudent(env, user, studentId)));
   const updates = [];
@@ -1180,7 +1180,7 @@ async function executeOfficeTask(env, user, plan, planId) {
       return { count, message: "已将 " + count + " 名学生移入回收站。" };
     }
     case "send_notifications": {
-      const ids = selectedIds(plan.studentIds, 50);
+      const ids = selectedIds(plan.studentIds, 500);
       const marks = ids.map(() => "?").join(",");
       const scope = user.role === "admin" ? "" : " AND id IN (SELECT u.id FROM users u LEFT JOIN classes cl ON cl.id=u.class_id WHERE cl.major_id IN (SELECT id FROM majors WHERE grade_id=?))";
       const { results } = await env.DB.prepare("SELECT id FROM users WHERE role='student' AND deleted_at IS NULL AND id IN (" + marks + ")" + scope)
@@ -1246,7 +1246,7 @@ async function normalizeOfficeAction(env, user, action, files) {
     return { answer: counselors.results.length ? "辅导员名单\n" + counselors.results.map(c => (c.name || c.username) + "（" + c.username + "） · " + (c.grade_name || "未分配年级")).join("\n") : "没有找到符合条件的辅导员。" };
   }
   if (["delete_students", "send_notifications", "advance_students", "list_students"].includes(type)) {
-    const limit = type === "send_notifications" ? 50 : 20;
+    const limit = ["send_notifications", "advance_students"].includes(type) ? 500 : 20;
     const students = await officeAudience(env, user, action, limit);
     if (type === "list_students") {
       if (!students.length) return { answer: "没有符合条件的学生。请核对筛选条件。" };
