@@ -197,6 +197,14 @@ h2 { font-size: 24px; line-height: 1.3; }
 }
 .nav-profile-menu a:hover, .nav-profile-menu .linklike:hover { background: var(--soft); color: var(--accent); }
 
+.nav a .nav-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px;
+  border-radius: 999px; background: var(--accent); color: #fff;
+  font: 700 11px/1 var(--mono);
+  box-shadow: 0 0 0 3px rgba(165, 31, 45, .16);
+}
+
 /* ---------- 主区 / 页脚 ---------- */
 .main { min-height: calc(100dvh - 158px); padding-block: 64px 96px; }
 .site-footer {
@@ -616,6 +624,20 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
 .notice-item h2 { margin: 0 0 5px; font-size: 18px; }
 .notice-item p { margin: 0; color: var(--muted); white-space: pre-wrap; }
 .notice-item time { color: var(--muted); font: 13px var(--mono); }
+
+/* 登录时的新通知弹窗（与扫描/确认弹层同体系，红白 + 玻璃按钮） */
+.notification-popup { width: min(26rem, calc(100vw - 2rem)); }
+.notification-popup h2 { margin: 0; font-size: 19px; }
+.notice-popup-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.notice-popup-close {
+  flex: none; width: 32px; height: 32px; padding: 0; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface); color: var(--muted);
+  font-size: 20px; line-height: 1; cursor: pointer; transition: color .2s, background .2s, border-color .2s;
+}
+.notice-popup-close:hover { color: var(--accent); border-color: rgba(165, 31, 45, .45); background: var(--accent-soft); }
+.notice-popup-body { display: grid; gap: 8px; }
+.notice-popup-title { font-size: 16px; font-weight: 600; color: var(--ink); }
+.notice-popup-body p { margin: 0; color: var(--muted); white-space: pre-wrap; }
 .invite-output { margin-top: 20px; overflow-wrap: anywhere; color: var(--muted); }
 
 /* ---------- 视图布局 ---------- */

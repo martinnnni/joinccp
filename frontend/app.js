@@ -214,6 +214,7 @@ function nav() {
   const scroll = make("div", { className: "nav-scroll" });
   for (const [page, label] of items) {
     const link = make("a", { href: "#" + page, text: label, className: active === page ? "active" : "" });
+    if (page === "notifications" && unreadNotifications > 0) link.append(make("span", { className: "nav-badge", text: String(unreadNotifications), "aria-label": unreadNotifications + " 条未读通知" }));
     if (page === "mentor") link.addEventListener("click", event => { event.preventDefault(); openMentor(); });
     scroll.append(link);
   }
@@ -229,12 +230,48 @@ function nav() {
           make("a", { href: "#recycle", text: "回收站" })
         ] : []),
         make("a", { href: "#password", text: "修改密码" }),
-        button("登出", logout, "linklike")));
+        button("退出", logout, "linklike")));
     navigation.append(profileMenu);
   }
 }
 async function refreshMe() {
   try { me = (await api("/api/me")).user; } catch { me = null; }
+}
+let unreadNotifications = 0;
+async function refreshUnreadNotifications() {
+  if (!me || me.role !== "student" || me.must_change_password) { unreadNotifications = 0; return []; }
+  try {
+    const data = await api("/api/notifications");
+    const unread = data.notifications.filter(item => !item.is_read);
+    unreadNotifications = unread.length;
+    return unread;
+  } catch { unreadNotifications = 0; return []; }
+}
+function notificationPopup(unread) {
+  if (!unread.length) return;
+  const first = unread[0], more = unread.length - 1;
+  const dialog = make("dialog", { className: "scan-overlay-card notification-popup", "aria-label": "新通知" },
+    make("div", { className: "notice-popup-head" },
+      make("h2", { text: "通知" }),
+      make("button", { type: "button", className: "notice-popup-close", "aria-label": "关闭", onclick: () => dialog.close() }, "×")));
+  const body = make("div", { className: "notice-popup-body" },
+    make("p", { className: "notice-popup-title", text: first.title }),
+    p(first.content),
+    more > 0 ? p("另有 " + more + " 条未读通知，可在通知中心查看。") : null);
+  const detail = button("详情", () => { dialog.close(); navigate("notifications"); }, "secondary");
+  const markRead = button("标为已读", async () => {
+    markRead.disabled = true;
+    try {
+      for (const item of unread) await post("/api/notifications/" + item.id + "/read", {});
+      unreadNotifications = 0;
+      nav();
+      dialog.close();
+    } catch (error) { markRead.disabled = false; }
+  });
+  dialog.append(body, make("div", { className: "upload-actions" }, detail, markRead));
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  document.body.append(dialog);
+  dialog.showModal();
 }
 function render() {
   document.body.dataset.surface = me ? "workspace" : "entry";
@@ -292,7 +329,9 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
       config = await api("/api/config");
       await refreshMe();
       resetMentorPanel();
+      const unread = me?.role === "student" && !me.must_change_password ? await refreshUnreadNotifications() : [];
       navigate(me?.must_change_password ? "password" : me?.role === "student" ? "profile" : "admin");
+      if (unread.length) notificationPopup(unread);
     } catch (error) { feedback(form, error.message); }
     finally { release(); }
   });
@@ -918,6 +957,8 @@ function notificationsPage() {
         read.disabled = true;
         try {
           await post("/api/notifications/" + item.id + "/read", {});
+          unreadNotifications = Math.max(0, unreadNotifications - 1);
+          nav();
           row.classList.add("read");
           read.remove();
         } catch (error) {
@@ -1680,6 +1721,7 @@ async function init() {
     if (config.initialized && location.hash === "#bootstrap") {
       history.replaceState(null, "", "#login");
     }
+    await refreshUnreadNotifications();
     render();
     const fab = document.getElementById("mentorFab");
     if (fab) fab.addEventListener("click", () => mentorPanelOpen ? closeMentor() : openMentor());
