@@ -209,7 +209,7 @@ function nav() {
   const active = location.hash.slice(1) || (me ? me.role === "student" ? "profile" : "admin" : "login");
   const items = me?.must_change_password ? [["password", "设置新密码"]] : me ? (me.role === "student"
     ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ...(me.is_monitor ? [["checks", "班级材料"]] : []), ["mentor", "成长导师"], ["notifications", "通知"]]
-    : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"], ["operations", "操作记录"], ["recycle", "回收站"]])
+    : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"], ["hierarchy", "管理体系"], ["operations", "操作记录"], ["recycle", "回收站"]])
     : (config?.initialized ? [] : [["bootstrap", "初始化"]]);
   const scroll = make("div", { className: "nav-scroll" });
   for (const [page, label] of items) {
@@ -292,7 +292,7 @@ function render() {
   else if (page === "checks" && me.role === "student" && me.is_monitor) root.replaceChildren(checksPage(true));
   else if (me.role === "student") root.replaceChildren(
     page === "check" ? checkPage() : page === "mentor" ? mentorPage() : page === "notifications" ? notificationsPage() : profilePage());
-  else root.replaceChildren(page === "checks" ? checksPage() : ["operations", "recycle"].includes(page) ? recordsPage(page) : adminPage());
+  else root.replaceChildren(page === "checks" ? checksPage() : page === "hierarchy" ? hierarchyPage() : ["operations", "recycle"].includes(page) ? recordsPage(page) : adminPage());
   if (operationFeedback) {
     root.prepend(make("p", { className: "form-feedback operation-result", role: "status", "data-kind": "success", text: operationFeedback }));
     operationFeedback = "";
@@ -445,7 +445,7 @@ function profilePage() {
     const stageNumber = Math.max(1, stageOrder.indexOf(profile.current_stage_slug) + 1);
     const materialState = x => x.review_status === "退回修改" ? "退回修改" :
       x.review_status === "已通过" || x.status === "已通过" ? "已通过" :
-      x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待班长初审" : x.status || "未提交";
+      x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待学生管理员初审" : x.status || "未提交";
     const done = data.materials.filter(x => materialState(x) === "已通过").length;
     const total = data.materials.length;
     const completion = total ? Math.round(done * 100 / total) : 0;
@@ -473,7 +473,7 @@ function profilePage() {
           item.checked_at ? make("details", { className: "submission-timeline" }, make("summary", { text: "提交历史" }),
             make("ol", {}, (data.submissionHistory || []).filter(entry => entry.material_id === item.id).map(entry => make("li", {},
               make("div", { className: "small", text: displayTime(entry.checked_at) + " · " + (entry.reviewed_at ? entry.review_status : "已提交") }),
-              entry.monitor_approved_at ? make("div", { className: "small", text: displayTime(entry.monitor_approved_at) + " · 班长初审通过" }) : null,
+              entry.monitor_approved_at ? make("div", { className: "small", text: displayTime(entry.monitor_approved_at) + " · 学生管理员初审通过" }) : null,
               entry.review_note ? make("div", { className: "small", text: entry.review_note }) : null,
               make("a", { className: "text-link small", href: "/api/checks/" + entry.id + "/file", text: "下载该版本" }))))) : null,
           materialState(item) === "退回修改" ? make("a", { href: "#check", className: "text-link small", text: "修改后重新提交" }) : null)))));
@@ -731,9 +731,9 @@ function mentorPage() {
     collapseHero.onclick = () => setHeroCollapsed(true);
     expandHero.onclick = () => setHeroCollapsed(false);
     const hero = make("div", { className: "mentor-hero" },
-      collapseHero,
       make("div", { className: "mentor-girl", "aria-hidden": "true" }, girlImg),
       make("div", { className: "mentor-titlebox" },
+        collapseHero,
         make("strong", { text: mentorTitle() }),
         make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })));
     const header = make("header", { className: "mentor-topbar" },
@@ -1352,7 +1352,7 @@ function checksPage(monitor = false) {
     make("th", { className: "bulk-select" }, selectAll),
     ["学生 / 班级", "材料", "文件", "审阅状态", "提交时间"].map(text => make("th", { text })))), rows);
   const classField = select("班级", "classId", [["", "全部班级"]]);
-  const statusField = select("状态", "status", [["", "全部状态"], ["staff", "待辅导员审阅"], ["monitor", "待班长初审"], ["approved", "已通过"], ["returned", "退回修改"]]);
+  const statusField = select("状态", "status", [["", "全部状态"], ["staff", "待辅导员审阅"], ["monitor", "待学生管理员初审"], ["approved", "已通过"], ["returned", "退回修改"]]);
   const since = field("提交日期起", "since", "date", false);
   const filters = make("form", { className: "bulk-tools review-filters" }, monitor ? null : classField, statusField, since,
     make("button", { type: "submit", className: "secondary", text: "筛选" }));
@@ -1397,7 +1397,7 @@ function checksPage(monitor = false) {
       selectAll.checked = false;
       count.textContent = "已选 0 份";
       rows.replaceChildren(...data.checks.map(x => {
-        const status = x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待班长初审" : x.review_status;
+        const status = x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待学生管理员初审" : x.review_status;
         return make("tr", {},
           make("td", { className: "bulk-select" }, canReview(x) ? make("input", { type: "checkbox", "aria-label": "选择 " + (x.student_name || x.student_id) + " 的 " + x.material_name, onchange: event => {
             if (event.target.checked) selected.add(x.id); else selected.delete(x.id);
@@ -1480,6 +1480,43 @@ function formsPage() {
   return shell;
 }
 const isStaffUser = () => me?.role === "admin" || me?.role === "counselor";
+
+function hierarchyPage() {
+  const shell = make("div", { className: "view view-hierarchy" }, pageHead("STAFF / ORG", "管理体系", "查看各专业、班级与学生的培养状态，学生管理员置顶。"), notice("正在读取数据…"));
+  (async () => { try {
+    const data = await api("/api/admin/hierarchy");
+    const badge = (label, cls) => make("span", { className: "badge " + cls, text: label });
+    const tree = make("div", { className: "hierarchy" });
+    for (const major of data.majors) {
+      const classTotal = major.classes.reduce((n, c) => n + c.students.length, 0);
+      const majorNode = make("details", { className: "hierarchy-major", open: "" },
+        make("summary", {},
+          make("strong", { text: major.name }),
+          make("span", { className: "small muted", text: (major.college_name ? major.college_name + " · " : "") + major.classes.length + " 个班 · " + classTotal + " 人" })));
+      for (const cls of major.classes) {
+        const classNode = make("details", { className: "hierarchy-class" },
+          make("summary", {},
+            make("span", { className: "hierarchy-class-name", text: cls.name }),
+            make("span", { className: "small muted", text: cls.students.length + " 人" }),
+            cls.monitor ? make("span", { className: "small", text: "学生管理员：" + cls.monitor.name }) : make("span", { className: "small muted", text: "未设学生管理员" })));
+        const list = make("ul", { className: "hierarchy-students" });
+        for (const s of cls.students) {
+          const tag = s.is_monitor ? badge("学生管理员", "monitor") : s.is_archived ? badge("已归档党员", "done") : badge("发展中", "developing");
+          list.append(make("li", { className: (s.is_monitor ? "is-monitor" : "") + (s.is_archived ? " is-archived" : "") },
+            make("span", { className: "hierarchy-student-name", text: s.name }),
+            make("span", { className: "small muted", text: s.student_no + (s.stage_name ? " · " + s.stage_name : "") }), tag));
+        }
+        if (!cls.students.length) list.append(make("li", { className: "small muted", text: "暂无学生" }));
+        classNode.append(list);
+        majorNode.append(classNode);
+      }
+      tree.append(majorNode);
+    }
+    if (!data.majors.length) tree.append(make("div", { className: "empty-state" }, "暂无可管理的专业。"));
+    shell.replaceChildren(pageHead("STAFF / ORG", "管理体系", "查看各专业、班级与学生的培养状态，学生管理员置顶。"), tree);
+  } catch (error) { shell.replaceChildren(pageHead("STAFF / ORG", "管理体系"), notice(error.message, "error")); } })();
+  return shell;
+}
 
 function adminPage() {
   const adminTitle = me.role === "admin" ? "管理员控制台" : "辅导员控制台";
@@ -1574,7 +1611,7 @@ function adminPage() {
     const studentCount = make("span", { className: "bulk-count", text: "已选 0 人" });
     const setMonitor = async (student, cls) => {
       if (!cls) return feedback(shell, "请先将学生分配到班级");
-      if (!await actionDialog("设置班长", "将 " + student.name + " 设为「" + cls.name + "」的班长。")) return;
+      if (!await actionDialog("设置学生管理员", "将 " + student.name + " 设为「" + cls.name + "」的学生管理员。")) return;
       try { await post("/api/admin/classes/monitor", { classId: cls.id, studentId: student.id }); render(); }
       catch (error) { feedback(shell, error.message); }
     };
@@ -1591,7 +1628,7 @@ function adminPage() {
         make("td", { text: (student.major_name ? student.major_name + " · " : "") + (student.class_name || "未分班") }),
         make("td", { text: data.nodes.find(x => x.slug === student.current_node_slug)?.name || "" }),
         make("td", {}, button("管理", () => showStudent(student, data), "secondary"),
-          button("设班长", () => setMonitor(student, data.classes.find(c => c.id === student.class_id)), "secondary"),
+          button("设学生管理员", () => setMonitor(student, data.classes.find(c => c.id === student.class_id)), "secondary"),
           button("移入回收站", async () => {
             if (!await actionDialog("移入回收站", student.name + " 将无法登录。可在回收站恢复账号。", "移入回收站")) return;
             try { await post("/api/admin/students/bulk-delete", { studentIds: [student.id] }); render(); }
@@ -1660,18 +1697,25 @@ function adminPage() {
         panel(make("div", { className: "panel-head" }, make("h2", { text: "辅导员管理" }), make("span", { className: "small", text: "共 " + data.counselors.length + " 人 · 批量增删请用右下角办公助理" })),
           data.counselors.length ? tableWrap(counselorsTable) : make("div", { className: "empty-state" }, make("strong", { text: "尚无辅导员" }), "可手动添加，或打开办公助理批量添加。"))
       ] : []),
-      panel(make("div", { className: "panel-head" }, make("h2", { text: "班级设置" }), make("span", { className: "small", text: "创建班级并命名，学生提交后可选该班班长" })),
+      panel(make("div", { className: "panel-head" }, make("h2", { text: "班级设置" }), make("span", { className: "small", text: "创建班级并命名，学生提交后可选该班学生管理员" })),
         classForm,
         data.classes.length ? tableWrap(make("table", { className: "data" },
-          make("thead", {}, make("tr", {}, ["班级", "专业", "班长", "操作"].map(x => make("th", { text: x })))),
-          make("tbody", {}, visibleClasses.map(cls => make("tr", {},
-            make("td", { text: cls.name }),
-            make("td", { text: data.majors.find(m => m.id === cls.major_id)?.name || "" }),
-            make("td", { text: data.students.find(s => s.id === cls.monitor_user_id)?.name || "未设置" }),
-            make("td", {}, button("查看学生", () => {
-              history.replaceState(null, "", "?classId=" + cls.id + "#admin");
-              render();
-            }, "secondary"))))))) : null),
+          make("thead", {}, make("tr", {}, ["班级", "专业", "学生管理员", "操作"].map(x => make("th", { text: x })))),
+          make("tbody", {}, visibleClasses.map(cls => {
+            const monitor = data.students.find(s => s.id === cls.monitor_user_id);
+            return make("tr", {},
+              make("td", { text: cls.name }),
+              make("td", { text: data.majors.find(m => m.id === cls.major_id)?.name || "" }),
+              make("td", {}, monitor ? make("span", {}, monitor.name, " ", make("a", { className: "text-link small", text: "取消", onclick: async () => {
+                if (!await actionDialog("取消学生管理员", "取消「" + cls.name + "」的学生管理员 " + monitor.name + "？")) return;
+                try { await post("/api/admin/classes/monitor", { classId: cls.id, studentId: null }); render(); }
+                catch (error) { feedback(shell, error.message); }
+              } })) : "未设置"),
+              make("td", {}, button("查看学生", () => {
+                history.replaceState(null, "", "?classId=" + cls.id + "#admin");
+                render();
+              }, "secondary")));
+          })))) : null),
       ...(me.role === "admin" ? [
         ...(!needCollege ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "学院与专业设置" })), collegeForm, majorForm)] : [panel(make("div", { className: "panel-head" }, make("h2", { text: "学院与专业设置" })), collegeForm)]),
         ...(!needMajor ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "邀请辅导员" })), inviteForm, inviteOutput)] : [])

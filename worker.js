@@ -455,7 +455,7 @@ export async function checkRoutes(request, env, path, user, audit = {}) {
     try { results = validateResults(JSON.parse(String(form.get("results") || "[]"))); }
     catch { throw new HttpError(400, "质检结果无效"); }
     const key = "checks/" + user.id + "/" + randomHex(16) + "." + type.ext;
-    // 本班设了班长则需班长先审核，否则直接进入辅导员审核
+    // 本班设了学生管理员则需学生管理员先审核，否则直接进入辅导员审核
     const cls = await env.DB.prepare("SELECT cl.monitor_user_id FROM classes cl JOIN users m ON m.id=cl.monitor_user_id AND m.deleted_at IS NULL WHERE cl.id=?").bind(user.class_id || 0).first();
     const monitorApproved = cls?.monitor_user_id ? 0 : 1;
     await env.FILES.put(key, await file.arrayBuffer(), { httpMetadata: { contentType: type.mime } });
@@ -524,7 +524,7 @@ export async function checkRoutes(request, env, path, user, audit = {}) {
     return json({ ok: true, checks: results.slice(0, 50), classes: classes.results, next: results.length > 50 ? results[49].id : null });
   }
   if (path === "/api/checks/monitor-approve" && request.method === "POST") {
-    assert(user.role === "student" && user.is_monitor && user.class_id, "仅班长可执行此操作", 403);
+    assert(user.role === "student" && user.is_monitor && user.class_id, "仅学生管理员可执行此操作", 403);
     const ids = selectedIds((await bodyJson(request)).checkIds);
     audit.targets = ids.join(",");
     const marks = ids.map(() => "?").join(",");
@@ -532,7 +532,7 @@ export async function checkRoutes(request, env, path, user, audit = {}) {
     assert(rows.results.length === ids.length, "部分材料不存在", 404);
     for (const row of rows.results) {
       assert(row.class_id === user.class_id, "只能审核本班同学提交的材料", 403);
-      assert(row.review_status === "待审阅" && row.monitor_approved === 0, "该材料已审核或不是待班长审核状态", 409);
+      assert(row.review_status === "待审阅" && row.monitor_approved === 0, "该材料已审核或不是待学生管理员审核状态", 409);
     }
     await env.DB.batch(rows.results.map(row => env.DB.prepare("UPDATE checks SET monitor_approved=1,monitor_approved_at=? WHERE id=?").bind(iso(), row.id)));
     return json({ ok: true, count: rows.results.length });
@@ -736,7 +736,7 @@ async function reviewChecks(env, user, data, finish = null) {
   const updates = [];
   for (const row of rows.results) {
     assert(user.role === "admin" || row.major_id === user.major_id, "无权审阅其他专业材料", 403);
-    assert(row.monitor_approved === 1, row.filename + "尚未经班长审核", 409);
+    assert(row.monitor_approved === 1, row.filename + "尚未经学生管理员审核", 409);
     assert(row.review_status === "待审阅", row.filename + "已审阅，请刷新列表", 409);
     const latest = await env.DB.prepare("SELECT id FROM checks WHERE student_id=? AND material_id=? ORDER BY id DESC LIMIT 1").bind(row.student_id, row.material_id).first();
     assert(latest?.id === row.id, row.filename + "已被新提交版本替代", 409);
@@ -779,10 +779,15 @@ async function createClass(env, user, data) {
 }
 
 async function setMonitor(env, user, data) {
-  assert(isStaff(user), "仅辅导员或管理员可设置班长", 403);
-  const classId = id(data.classId), studentId = id(data.studentId);
+  assert(isStaff(user), "仅辅导员或管理员可设置学生管理员", 403);
+  const classId = id(data.classId);
   const cls = await env.DB.prepare("SELECT id,major_id FROM classes WHERE id=?").bind(classId).first();
   assert(cls && (user.role === "admin" || cls.major_id === user.major_id), "班级不存在或不在管理范围内", 404);
+  if (data.studentId === null || data.studentId === undefined || data.studentId === "") {
+    await env.DB.prepare("UPDATE classes SET monitor_user_id=NULL WHERE id=?").bind(classId).run();
+    return json({ ok: true });
+  }
+  const studentId = id(data.studentId);
   const student = await env.DB.prepare("SELECT id,class_id FROM users WHERE id=? AND role='student' AND deleted_at IS NULL").bind(studentId).first();
   assert(student && student.class_id === classId, "学生不存在或不在该班级", 404);
   await env.DB.prepare("UPDATE classes SET monitor_user_id=? WHERE id=?").bind(studentId, classId).run();
@@ -865,6 +870,37 @@ export async function adminRoutes(request, env, path, user, audit = {}) {
       ? await env.DB.prepare("SELECT u.id,u.username,u.major_id,m.name AS major_name,m.college_id,d.name AS college_name,u.name,u.created_at FROM users u LEFT JOIN majors m ON m.id=u.major_id LEFT JOIN departments d ON d.id=m.college_id WHERE u.role='counselor' AND u.deleted_at IS NULL ORDER BY u.id").all()
       : await env.DB.prepare("SELECT u.id,u.username,u.major_id,m.name AS major_name,m.college_id,d.name AS college_name,u.name,u.created_at FROM users u LEFT JOIN majors m ON m.id=u.major_id LEFT JOIN departments d ON d.id=m.college_id WHERE u.role='counselor' AND u.deleted_at IS NULL AND u.major_id=?").bind(user.major_id).all();
     return json({ ok: true, students: students.results, counselors: counselors.results, colleges: colleges.results, majors: majors.results, classes: classes.results, nodes: nodes.results, materials: materials.results, invites: invites.results });
+  }
+  if (path === "/api/admin/hierarchy" && request.method === "GET") {
+    const majorIds = user.role === "admin"
+      ? (await env.DB.prepare("SELECT id FROM majors").all()).results.map(r => r.id)
+      : [user.major_id];
+    if (!majorIds.length) return json({ ok: true, majors: [] });
+    const marks = majorIds.map(() => "?").join(",");
+    const majors = await env.DB.prepare("SELECT m.id,m.name,d.name AS college_name FROM majors m LEFT JOIN departments d ON d.id=m.college_id WHERE m.id IN (" + marks + ") ORDER BY m.id").bind(...majorIds).all();
+    const classes = await env.DB.prepare("SELECT id,name,major_id,monitor_user_id FROM classes WHERE major_id IN (" + marks + ") ORDER BY id").bind(...majorIds).all();
+    const classIds = classes.results.map(c => c.id);
+    const students = classIds.length
+      ? await env.DB.prepare("SELECT u.id,u.class_id,p.name,p.student_no,p.current_stage_slug,p.current_node_slug,s.name AS stage_name FROM users u JOIN profiles p ON p.user_id=u.id LEFT JOIN stages s ON s.slug=p.current_stage_slug WHERE u.role='student' AND u.deleted_at IS NULL AND u.class_id IN (" + classIds.map(() => "?").join(",") + ") ORDER BY p.name").bind(...classIds).all()
+      : { results: [] };
+    const classesByMajor = {}, studentsByClass = {};
+    for (const c of classes.results) (classesByMajor[c.major_id] ||= []).push(c);
+    for (const s of students.results) (studentsByClass[s.class_id] ||= []).push(s);
+    const majorsOut = majors.results.map(m => ({
+      id: m.id, name: m.name, college_name: m.college_name || "",
+      classes: (classesByMajor[m.id] || []).map(c => {
+        const list = studentsByClass[c.id] || [];
+        const monitor = list.find(s => s.id === c.monitor_user_id) || null;
+        const rank = s => s.id === c.monitor_user_id ? 0 : (s.current_node_slug === "archive" ? 1 : 2);
+        const ranked = [...list].sort((a, b) => rank(a) - rank(b) || (a.name < b.name ? -1 : 1));
+        return {
+          id: c.id, name: c.name,
+          monitor: monitor ? { id: monitor.id, name: monitor.name } : null,
+          students: ranked.map(s => ({ id: s.id, name: s.name, student_no: s.student_no, stage_name: s.stage_name || "", is_archived: s.current_node_slug === "archive", is_monitor: s.id === c.monitor_user_id }))
+        };
+      })
+    }));
+    return json({ ok: true, majors: majorsOut });
   }
   if (path === "/api/admin/students/bulk-advance" && request.method === "POST") {
     const data = await bodyJson(request);
@@ -1115,7 +1151,7 @@ async function executeOfficeTask(env, user, plan, planId) {
     case "set_monitor":
       await setMonitor(env, user, plan);
       await finish.run();
-      return { count, message: "已设置班长。" };
+      return { count, message: "已设置学生管理员。" };
   }
 }
 
@@ -1207,7 +1243,7 @@ async function normalizeOfficeAction(env, user, action, files) {
       assert(cls && (user.role === "admin" || cls.major_id === user.major_id), "班级不存在或不在管理范围内", 404);
       const student = await officeStudent(env, user, action.student);
       assert(student.class_id === classId, "该学生不属于所选班级", 409);
-      return { type, classId, studentId: student.id, studentNo: student.student_no, preview: "将把 " + student.name + "（" + student.student_no + "）设为「" + cls.name + "」的班长。" };
+      return { type, classId, studentId: student.id, studentNo: student.student_no, preview: "将把 " + student.name + "（" + student.student_no + "）设为「" + cls.name + "」的学生管理员。" };
     }
     assert(user.role === "admin", "仅管理员可执行此操作", 403);
     const majorId = id(action.majorId), count = Number(action.count);

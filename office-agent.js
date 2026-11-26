@@ -16,7 +16,7 @@ const operations = {
   create_department: ["{name}，新增学院", null, ["name"], true],
   create_major: ["{collegeId,name}，新增专业", null, ["collegeId", "name"], true],
   create_class: ["{majorId,name}，新增班级", null, ["majorId", "name"]],
-  set_monitor: ["{classId,student}，将该学生设为班长", null, ["classId", "student"]]
+  set_monitor: ["{classId,student}，将该学生设为学生管理员", null, ["classId", "student"]]
 };
 
 export const OFFICE_ACTIONS = new Set(Object.keys(operations));
