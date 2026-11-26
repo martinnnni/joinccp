@@ -21,11 +21,12 @@ test("high-risk application surfaces use intrinsic containment", () => {
   assert.match(responsive, /overflow-wrap:\s*anywhere/);
 });
 
-test("metric cards respond to their container instead of viewport only", () => {
-  assert.match(responsive, /\.metric-grid\s*\{\s*container-type:\s*inline-size;/);
-  assert.match(responsive, /@container\s*\(max-width:\s*620px\)/);
-  assert.match(responsive, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto/);
-  assert.match(responsive, /\.metric-grid \.metric-value[\s\S]*text-align:\s*right/);
+test("mobile metric cards keep their original vertical left-aligned layout", () => {
+  assert.doesNotMatch(responsive, /\.metric-grid\s*\{\s*container-type:/);
+  assert.doesNotMatch(responsive, /@container\s*\(max-width:/);
+  assert.match(responsive, /\.metric-grid \.metric\s*\{\s*display:\s*block !important;/);
+  assert.match(responsive, /\.metric-grid \.metric-value[\s\S]*text-align:\s*left !important/);
+  assert.match(responsive, /font-size:\s*clamp\(24px,\s*8vw,\s*30px\) !important/);
 });
 
 test("touch desktop mode and extreme narrow screens have fallbacks", () => {
@@ -34,8 +35,3 @@ test("touch desktop mode and extreme narrow screens have fallbacks", () => {
   assert.match(responsive, /\.review-preview, \.action-dialog, \.scan-overlay-card[\s\S]*max-height:\s*calc\(100dvh - 12px\)/);
 });
 
-test("the mobile mentor character stays available without covering card content", () => {
-  assert.match(responsive, /\.mentor-fab\s*\{[\s\S]*width:\s*32px;[\s\S]*height:\s*38px;/);
-  assert.match(responsive, /\.mentor-fab-girl\s*\{\s*width:\s*28px;\s*height:\s*34px;/);
-  assert.match(responsive, /\.mentor-fab-label\s*\{[\s\S]*clip:\s*rect\(0 0 0 0\)/);
-});
