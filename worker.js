@@ -871,9 +871,15 @@ export async function adminRoutes(request, env, path, user, audit = {}) {
     const where = cond.length ? " WHERE " + cond.join(" AND ") : "";
     const students = await env.DB.prepare("SELECT u.id,u.username,u.class_id,cl.name AS class_name,cl.major_id,m.name AS major_name,m.college_id,d.name AS college_name,g.name AS grade_name,p.* FROM users u JOIN profiles p ON p.user_id=u.id LEFT JOIN classes cl ON cl.id=u.class_id LEFT JOIN majors m ON m.id=cl.major_id LEFT JOIN departments d ON d.id=m.college_id LEFT JOIN grades g ON g.id=m.grade_id" + where + " ORDER BY p.student_no LIMIT 500").bind(...args).all();
     const colleges = await env.DB.prepare("SELECT id,name FROM departments ORDER BY name").all();
-    const grades = await env.DB.prepare("SELECT id,college_id,name FROM grades ORDER BY id").all();
-    const majors = await env.DB.prepare("SELECT id,college_id,grade_id,name FROM majors ORDER BY id").all();
-    const classes = await env.DB.prepare("SELECT id,major_id,name,monitor_user_id FROM classes ORDER BY id").all();
+    const grades = user.role === "admin"
+      ? await env.DB.prepare("SELECT id,college_id,name FROM grades ORDER BY id").all()
+      : await env.DB.prepare("SELECT id,college_id,name FROM grades WHERE id=?").bind(user.grade_id).all();
+    const majors = user.role === "admin"
+      ? await env.DB.prepare("SELECT id,college_id,grade_id,name FROM majors ORDER BY id").all()
+      : await env.DB.prepare("SELECT id,college_id,grade_id,name FROM majors WHERE grade_id=?").bind(user.grade_id).all();
+    const classes = user.role === "admin"
+      ? await env.DB.prepare("SELECT id,major_id,name,monitor_user_id FROM classes ORDER BY id").all()
+      : await env.DB.prepare("SELECT id,major_id,name,monitor_user_id FROM classes WHERE major_id IN (SELECT id FROM majors WHERE grade_id=?) ORDER BY id").bind(user.grade_id).all();
     const nodes = await env.DB.prepare("SELECT slug,stage_slug,name,position FROM nodes ORDER BY stage_slug,position").all();
     const materials = await env.DB.prepare("SELECT id,name,stage_slug FROM materials ORDER BY id").all();
     const invites = user.role === "admin"
