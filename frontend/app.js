@@ -451,7 +451,7 @@ function profilePage() {
   const profileTitle = () => make("h1", { className: "page-title" },
     make("span", { text: "我的档案" }),
     make("span", { className: "greeting-title", text: " | " + dayPart() + "好！" }));
-  const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", profileTitle(), "查看当前培养阶段、下一步节点和材料完成情况。"), notice("正在读取档案…"));
+  const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", profileTitle(), "查看当前培养阶段、下一步节点和材料完成情况。"), skeleton());
   (async () => { try {
     const data = await api("/api/profile");
     const profile = data.profile;
@@ -982,7 +982,7 @@ function resetMentorPanel() {
 }
 
 function notificationsPage() {
-  const shell = make("div", { className: "view view-notifications" }, pageHead("STUDENT / INBOX", "通知中心", "重要节点和材料提醒会集中显示在这里。"), notice("正在读取通知…"));
+  const shell = make("div", { className: "view view-notifications" }, pageHead("STUDENT / INBOX", "通知中心", "重要节点和材料提醒会集中显示在这里。"), skeleton());
   (async () => { try {
     const data = await api("/api/notifications");
     shell.replaceChildren(pageHead("STUDENT / INBOX", "通知中心", "重要节点和材料提醒会集中显示在这里。"));
@@ -1202,7 +1202,7 @@ function editScan(initialCanvas, onSelect) {
 }
 
 function checkPage() {
-  const shell = make("div", { className: "view view-check" }, pageHead("STUDENT / SUBMISSION", "材料提交", "上传 Word、PDF 或图片，提交后可在材料记录中查看。"), notice("正在读取材料列表…"));
+  const shell = make("div", { className: "view view-check" }, pageHead("STUDENT / SUBMISSION", "材料提交", "上传 Word、PDF 或图片，提交后可在材料记录中查看。"), skeleton());
   (async () => { try {
     const data = await api("/api/materials");
     const materialChoices = data.materials.map(x => [x.id, x.name]);
@@ -1440,7 +1440,7 @@ function checksPage(monitor = false) {
 }
 
 function formsPage() {
-  const shell = make("div", { className: "view view-forms" }, pageHead("LIBRARY / DOWNLOADS", "资料下载", "按培养阶段查找和下载所需表格。"), notice("正在读取表格…"));
+  const shell = make("div", { className: "view view-forms" }, pageHead("LIBRARY / DOWNLOADS", "资料下载", "按培养阶段查找和下载所需表格。"), skeleton());
   (async () => { try {
     const data = await api("/api/forms");
     const upload = isStaffUser() ? make("form", { className: "form-grid form-upload" },
@@ -1497,7 +1497,7 @@ function formsPage() {
 const isStaffUser = () => me?.role === "admin" || me?.role === "counselor";
 
 function hierarchyPage() {
-  const shell = make("div", { className: "view view-hierarchy" }, pageHead("STAFF / ORG", "管理体系", "查看各专业、班级与学生的培养状态，学生管理员置顶。"), notice("正在读取数据…"));
+  const shell = make("div", { className: "view view-hierarchy" }, pageHead("STAFF / ORG", "管理体系", "查看各专业、班级与学生的培养状态，学生管理员置顶。"), skeleton());
   (async () => { try {
     const data = await api("/api/admin/hierarchy");
     const badge = (label, cls) => make("span", { className: "badge " + cls, text: label });
@@ -1540,6 +1540,13 @@ function hierarchyPage() {
     shell.replaceChildren(pageHead("STAFF / ORG", "管理体系", "查看各专业、班级与学生的培养状态，学生管理员置顶。"), tree);
   } catch (error) { shell.replaceChildren(pageHead("STAFF / ORG", "管理体系"), notice(error.message, "error")); } })();
   return shell;
+}
+
+function skeleton() {
+  return make("div", { "aria-hidden": "true" },
+    make("div", { className: "skeleton skeleton-block", style: "height:120px" }),
+    make("div", { className: "skeleton skeleton-block" }),
+    make("div", { className: "skeleton skeleton-block", style: "height:160px" }));
 }
 
 function adminSkeleton() {
