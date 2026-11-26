@@ -85,6 +85,10 @@ const p = text => make("p", { text });
 const panel = (...children) => make("section", { className: "panel" }, children);
 const pageHead = (code, title, description = "") => make("div", { className: "page-head" },
   make("div", {}, h(title), description ? p(description) : null));
+const dayPart = () => {
+  const h = new Date().getHours();
+  return h >= 5 && h < 9 ? "早晨" : h >= 9 && h < 12 ? "上午" : h >= 12 && h < 14 ? "中午" : h >= 14 && h < 18 ? "下午" : "晚上";
+};
 const metric = (label, value, note = "", accent = false) => make("div", { className: "metric" },
   make("span", { className: "metric-label", text: label }),
   make("strong", { className: "metric-value" + (accent ? " accent" : ""), text: value }),
@@ -437,7 +441,7 @@ function recordsPage(page) {
 }
 
 function profilePage() {
-  const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", "我的档案", "查看当前培养阶段、下一步节点和材料完成情况。"), notice("正在读取档案…"));
+  const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", "我的档案", "同学，" + dayPart() + "好。查看当前培养阶段、下一步节点和材料完成情况。"), notice("正在读取档案…"));
   (async () => { try {
     const data = await api("/api/profile");
     const profile = data.profile;
@@ -480,7 +484,7 @@ function profilePage() {
     const materials = panel(make("div", { className: "panel-head" },
       make("h2", { text: "本阶段材料" }), make("span", { className: "small", text: "共 " + total + " 项" })),
       total ? tableWrap(table) : make("div", { className: "empty-state" }, make("strong", { text: "暂无材料" }), "此阶段尚未配置材料清单。"));
-    shell.replaceChildren(pageHead("STUDENT / OVERVIEW", "我的档案", "查看当前培养阶段、下一步节点和材料完成情况。"),
+    shell.replaceChildren(pageHead("STUDENT / OVERVIEW", "我的档案", "同学，" + dayPart() + "好。查看当前培养阶段、下一步节点和材料完成情况。"),
       summary, stats,
       ...(data.next ? [notice("下一步：" + data.next.name + "。请按计划准备相关材料。")] : []),
       materials);
@@ -556,7 +560,7 @@ function rosterEditor(initial, alive, onDone) {
         const controls = [...rosterForm.elements].filter(control => control !== confirm && !control.disabled);
         controls.forEach(control => { control.disabled = true; });
         try {
-          const outcome = await post("/api/office/execute", { planId: preview.plan.id });
+          const outcome = await post("/api/office/execute", { planId: preview.plan.id, jitToken: preview.plan.jitToken });
           if (draft.isConnected && alive()) { rosterForm.remove(); onDone(outcome.message); }
         } catch (error) { confirm.disabled = false; feedback(rosterForm, error.message + "。可重新校验后再试。"); }
         finally { controls.forEach(control => { control.disabled = false; }); }
@@ -813,13 +817,14 @@ function mentorPage() {
               if (result.plan.type === "reset_password") {
                 temporaryPassword = randomHex(12);
                 const newSalt = randomHex(16), newVerifier = await derive(temporaryPassword, newSalt);
-                outcome = await post("/api/office/execute", { planId: result.plan.id, newSalt, newVerifier });
+                outcome = await post("/api/office/execute", { planId: result.plan.id, jitToken: result.plan.jitToken, newSalt, newVerifier });
               } else if (result.plan.type === "upload_forms" || result.plan.type === "upload_student_files") {
                 const body = new FormData();
                 body.append("planId", result.plan.id);
+                body.append("jitToken", result.plan.jitToken);
                 plannedFiles.forEach(file => body.append("file", file, file.name));
                 outcome = await uploadWithProgress("/api/office/execute", body, progress.querySelector(".mentor-bubble") || progress);
-              } else outcome = await post("/api/office/execute", { planId: result.plan.id });
+              } else outcome = await post("/api/office/execute", { planId: result.plan.id, jitToken: result.plan.jitToken });
               if (!alive()) return;
               progress.remove();
               pendingOfficePlan = null;
@@ -1528,7 +1533,7 @@ function hierarchyPage() {
 }
 
 function adminPage() {
-  const adminTitle = me.role === "admin" ? "管理员控制台" : "辅导员控制台";
+  const adminTitle = "老师，" + dayPart() + "好";
   const adminCode = me.role === "admin" ? "ADMIN / CONSOLE" : "COUNSELOR / CONSOLE";
   const shell = make("div", { className: "view view-admin" }, pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"), notice("正在读取数据…"));
   (async () => { try {

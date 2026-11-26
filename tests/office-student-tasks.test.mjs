@@ -71,7 +71,7 @@ function setup(t) {
       desired = action;
       return (await call("plan", { question: "处理测试任务" }, user)).json();
     },
-    execute: (plan, user) => call("execute", { planId: plan.id }, user)
+    execute: (plan, user) => call("execute", { planId: plan.id, jitToken: plan.jitToken }, user)
   };
 }
 
@@ -172,7 +172,7 @@ test("批量名单逐行标记重复、缺项和已存在账号，校验通过�
   const accepted = await (await call("roster-preview", { classId: 2, rows })).json();
   assert.equal(accepted.plan.type, "register_students");
   assert.equal(db.prepare("SELECT count(*) AS n FROM profiles WHERE student_no='100015'").get().n, 0);
-  assert.equal((await (await call("execute", { planId: accepted.plan.id })).json()).count, 1);
+  assert.equal((await (await call("execute", { planId: accepted.plan.id, jitToken: accepted.plan.jitToken })).json()).count, 1);
   assert.equal(db.prepare("SELECT must_change_password FROM users WHERE username='100015'").get().must_change_password, 1);
 });
 

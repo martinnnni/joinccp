@@ -72,7 +72,7 @@ test("办公助理仅生成待确认计划，不在规划阶段重置密码", as
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"reply":"请核对目标学生","action":{"type":"reset_password","student":"123456789"}}' } }] }), { status: 200 });
   const writes = [];
-  const env = { DEEPSEEK_API_KEY: "test", DB: { prepare(sql) { return {
+  const env = { DEEPSEEK_API_KEY: "test", AUTH_PEPPER: "p".repeat(40), DB: { prepare(sql) { return {
     sql, params: [], bind(...params) { this.params = params; return this; },
     async all() {
       if (sql.includes("FROM users u JOIN profiles p")) return { results: [{ id: 7, name: "张三", student_no: "123456789", department_id: 2 }] };

@@ -6,6 +6,7 @@ import { isPersonalQuestion, isSiteHelpQuestion, personalMatches, isSelfIdentity
 import { identifyMessages, parseIdentification, reviewMessages, parseReview, formatReview } from "./mentor-review.js";
 import { isCurrentTimeQuestion, getCurrentTime } from "./mentor-time.js";
 import { officeMessages, parseOfficePlan } from "./office-agent.js";
+import { decideAgentPolicy, protectedMentorIntent } from "./agent-policy.js";
 import { FORM_SCHEMA, redactPhone, looksLikeActionRequest, isAccountDeletionRequest, isProxyRequest, studentActionMessages, parseStudentAction } from "./mentor-actions.js";
 
 const json = (data, status = 200, extra = {}) => new Response(JSON.stringify(data), {
@@ -31,6 +32,17 @@ class HttpError extends Error {
 }
 function assert(condition, message, status = 400) {
   if (!condition) throw new HttpError(status, message);
+}
+function enforceAgentPolicy(user, capability, audit = {}, action = "", targetUserId = null) {
+  const decision = decideAgentPolicy({ role: user?.role || "guest", capability, action, actorId: user?.id, targetUserId });
+  audit.policyDecision = decision.allowed ? "allow" : "deny";
+  audit.policyReason = decision.reason;
+  if (!decision.allowed) {
+    audit.action = "pep_deny";
+    audit.targets = capability + (action ? ":" + action : "");
+    throw new HttpError(user ? 403 : 401, "当前身份无权执行此操作");
+  }
+  return decision;
 }
 const MENTOR_CODES = {
   "M-100": "成长导师尚未启用（未配置 AI API Key）",
@@ -281,17 +293,19 @@ async function logMentorQuestion(env, user, question, decision) {
       .bind(user?.id ?? null, question, decision.intent, decision.topSimilarity, decision.outcome).run();
   } catch (error) { console.error("mentor question log failed", error); }
 }
-async function mentorMatches(env, user, question, previousQuestion) {
+async function mentorMatches(env, user, question, previousQuestion, audit = {}) {
   const shared = retrieve(question, { stageSlug: user?.current_stage_slug, previousQuestion });
   if (!user || user.role !== "student" || !isPersonalQuestion(question)) return shared;
+  enforceAgentPolicy(user, "mentor.personal", audit);
   const records = await env.DB.prepare("SELECT m.name,m.stage_slug,s.name AS stage_name,r.status,r.r2_key FROM materials m JOIN stages s ON s.slug=m.stage_slug LEFT JOIN material_records r ON r.material_id=m.id AND r.student_id=? ORDER BY s.position,m.id")
     .bind(user.id).all();
   const node = await env.DB.prepare("SELECT name FROM nodes WHERE slug=?").bind(user.current_node_slug).first();
   return [...personalMatches(question, user, records.results, node?.name || ""), ...shared.slice(0, 2)];
 }
-export async function mentorRoutes(request, env, path, user) {
+export async function mentorRoutes(request, env, path, user, audit = {}) {
   if (!path.startsWith("/api/mentor")) return null;
   if (user && !["student", "counselor", "admin"].includes(user.role)) assert(false, "仅学生、辅导员和管理员可使用成长导师", 403);
+  enforceAgentPolicy(user, "mentor.public", audit);
   const enabled = !!env.DEEPSEEK_API_KEY;
   if (path === "/api/mentor" && request.method === "GET") {
     return json({ ok: true, enabled, knowledgeCount, message: enabled ? "成长导师已启用" : "知识库检索已就绪，AI 回答等待配置 API Key" });
@@ -299,6 +313,7 @@ export async function mentorRoutes(request, env, path, user) {
   if (path === "/api/mentor/review" && request.method === "POST") {
     assert(user, "请先登录", 401);
     assert(user.role === "student", "仅学生可使用文件检查", 403);
+    enforceAgentPolicy(user, "mentor.review", audit);
     if (!enabled) throw mentorFailure("M-100");
     const data = await bodyJson(request);
     const filename = clean(data.filename, 150);
@@ -343,8 +358,19 @@ export async function mentorRoutes(request, env, path, user) {
     }
     const history = Array.isArray(data.history) ? data.history.slice(-6) : [];
     const previousQuestion = history.filter(item => item?.role === "user").at(-1)?.content || "";
+    if (protectedMentorIntent(question)) {
+      const decision = decideAgentPolicy({ role: user?.role || "guest", capability: "mentor.personal", actorId: user?.id });
+      audit.policyDecision = decision.allowed ? "allow" : "deny";
+      audit.policyReason = decision.reason;
+      if (!decision.allowed) {
+        audit.action = "pep_deny"; audit.targets = "mentor.personal";
+        const answer = user ? "个人档案和材料查询请使用学生本人账号；辅导员和管理员请在办公助理或工作台按管理范围查询。"
+          : "登录学生账号后才能查看个人档案、培养进度和材料状态。未登录时我可以回答公开的流程与材料问题。";
+        return json({ ok: true, answer, sources: [], route: "login_required", intent: "personal", requiresLogin: !user });
+      }
+    }
     if (path === "/api/mentor/retrieve") {
-      const matches = await mentorMatches(env, user, question, previousQuestion);
+      const matches = await mentorMatches(env, user, question, previousQuestion, audit);
       return json({ ok: true, sources: publicSources(matches) });
     }
     if (isCurrentTimeQuestion(question)) {
@@ -389,7 +415,7 @@ export async function mentorRoutes(request, env, path, user) {
       classification.reason = "涉及党员发展相关事项，先检索后自主回答";
     }
     const matches = classification.intent === "business" && !isIdentityQuestion(question)
-      ? await mentorMatches(env, user, question, previousQuestion) : null;
+      ? await mentorMatches(env, user, question, previousQuestion, audit) : null;
     const decision = decideMentorRoute({ question, classification, history, stageSlug: user?.current_stage_slug, previousQuestion, config,
       retrieveFn: matches ? () => matches : retrieve });
     let answer = decision.answer || "";
@@ -638,9 +664,9 @@ async function registerCounselors(env, user, data) {
   return json({ ok: true, count: counselors.length }, 201);
 }
 
-function auditStatement(env, user, action, method, status, targets = null) {
-  return env.DB.prepare("INSERT INTO operation_logs(actor_id,actor_role,action,method,status,targets) VALUES(?,?,?,?,?,?)")
-    .bind(user?.id ?? null, user?.role ?? null, action, method, status, targets);
+function auditStatement(env, user, action, method, status, targets = null, policyDecision = null, policyReason = null) {
+  return env.DB.prepare("INSERT INTO operation_logs(actor_id,actor_role,action,method,status,targets,policy_decision,policy_reason) VALUES(?,?,?,?,?,?,?,?)")
+    .bind(user?.id ?? null, user?.role ?? null, action, method, status, targets, policyDecision, policyReason);
 }
 
 async function archiveUsers(env, user, ids, role, finish) {
@@ -1380,10 +1406,14 @@ async function normalizeOfficeAction(env, user, action, files) {
 }
 
 async function saveOfficePlan(env, user, action) {
+  requireSecret(env);
   const planId = randomHex(16);
-  await env.DB.prepare("INSERT INTO office_plans(id,user_id,action_type,payload_json,expires_at) VALUES(?,?,?,?,?)")
-    .bind(planId, user.id, action.type, JSON.stringify(action), new Date(Date.now() + 15 * 60000).toISOString()).run();
-  return { id: planId, type: action.type, preview: action.preview, expiresInMinutes: 15 };
+  const payloadJson = JSON.stringify(action);
+  const expiresAt = new Date(Date.now() + 15 * 60000).toISOString();
+  await env.DB.prepare("INSERT INTO office_plans(id,user_id,action_type,payload_json,expires_at,jit_version) VALUES(?,?,?,?,?,1)")
+    .bind(planId, user.id, action.type, payloadJson, expiresAt).run();
+  const jitToken = await hmac(env.AUTH_PEPPER, "office-jit:v1:" + user.id + ":" + planId + ":" + action.type + ":" + await sha256(payloadJson) + ":" + expiresAt);
+  return { id: planId, type: action.type, preview: action.preview, expiresInMinutes: 15, jitToken };
 }
 
 export async function inspectStudentRoster(env, rows) {
@@ -1410,8 +1440,9 @@ export async function inspectStudentRoster(env, rows) {
 
 export async function officeRoutes(request, env, path, user, audit = {}) {
   if (!path.startsWith("/api/office/")) return null;
-  assert(isStaff(user), "仅辅导员和管理员可使用办公助理", 403);
+  enforceAgentPolicy(user, "office.agent", audit);
   if (path === "/api/office/roster-preview" && request.method === "POST") {
+    enforceAgentPolicy(user, "office.tool", audit, "register_students");
     const data = await bodyJson(request);
     const rows = await inspectStudentRoster(env, data.rows);
     const classes = user.role === "admin" ? (await env.DB.prepare("SELECT id,major_id,name FROM classes ORDER BY id").all()).results :
@@ -1451,6 +1482,12 @@ export async function officeRoutes(request, env, path, user, audit = {}) {
     let parsed;
     try { parsed = parseOfficePlan(raw); } catch (error) { return json({ ok: true, answer: error.message + "。请补充具体信息。", plan: null }); }
     if (!parsed.action) return json({ ok: true, answer: parsed.reply, plan: null });
+    const proposed = decideAgentPolicy({ role: user.role, capability: "office.tool", action: parsed.action.type, actorId: user.id });
+    if (!proposed.allowed) {
+      audit.policyDecision = "deny"; audit.policyReason = proposed.reason;
+      audit.action = "pep_deny"; audit.targets = "office.tool:" + parsed.action.type;
+      return json({ ok: true, answer: proposed.reason === "admin_only" ? "仅管理员可执行此操作。" : "当前角色无权执行该操作。", plan: null });
+    }
     if (parsed.action.type === "register_students") {
       const rows = await inspectStudentRoster(env, parsed.action.students);
       const cls = catalog.classes.find(item => String(item.id) === String(parsed.action.classId));
@@ -1468,6 +1505,15 @@ export async function officeRoutes(request, env, path, user, audit = {}) {
     const planId = clean(multipart ? data.get("planId") : data.planId, 32);
     assert(validHex(planId, 32), "操作编号无效");
     const row = await env.DB.prepare("SELECT * FROM office_plans WHERE id=? AND user_id=?").bind(planId, user.id).first();
+    if (row) {
+      enforceAgentPolicy(user, "office.tool", audit, row.action_type || JSON.parse(row.payload_json).type);
+      if (row.jit_version === 1) {
+        requireSecret(env);
+        const expected = await hmac(env.AUTH_PEPPER, "office-jit:v1:" + user.id + ":" + planId + ":" + row.action_type + ":" + await sha256(row.payload_json) + ":" + row.expires_at);
+        const received = clean(multipart ? data.get("jitToken") : data.jitToken, 64);
+        assert(validHex(received, 64) && equal(received, expected), "本次授权无效，请重新预览并确认", 403);
+      }
+    }
     if (row?.status === "done" && row.result_json && ["upload_forms", "upload_student_files"].includes(row.action_type)) {
       const result = JSON.parse(row.result_json);
       return json({ ok: true, ...result, message: "已保存 " + result.count + " 份文件。" });
@@ -1632,8 +1678,7 @@ async function saveStudentPlan(env, user, conversationId, payload) {
 }
 export async function agentRoutes(request, env, path, user, audit = {}) {
   if (!path.startsWith("/api/agent/")) return null;
-  assert(user, "请先登录", 401);
-  assert(user.role === "student", "仅学生可使用站内操作", 403);
+  enforceAgentPolicy(user, "student.agent", audit);
   if (path === "/api/agent/plan" && request.method === "POST") {
     if (!agentActionsEnabled(env)) return json({ ok: true, deferred: true, answer: null, action: null, plan: null });
     const data = await bodyJson(request);
@@ -1665,6 +1710,7 @@ export async function agentRoutes(request, env, path, user, audit = {}) {
     catch (error) { audit.action = "agent_reject"; audit.targets = "parse"; return json({ ok: true, answer: error.message + "。请补充信息后重试。", action: null, plan: null }); }
     if (!parsed.action) { audit.action = "agent_answer"; return json({ ok: true, answer: parsed.reply, action: null, plan: null }); }
     const action = parsed.action;
+    enforceAgentPolicy(user, "student.tool", audit, action.type, user.id);
     if (action.type === "navigate") {
       await recordConversationAction(env, user.id, conversationId, action.type);
       audit.action = "agent_navigate"; audit.targets = action.route;
@@ -1702,9 +1748,11 @@ export async function agentRoutes(request, env, path, user, audit = {}) {
     assert(row && row.user_id === user.id, "操作不存在或不属于你", 404);
     assert(row.status === "pending" && row.expires_at > iso(), "操作已执行或已过期，请重新提出", 409);
     assert(validHex(payloadHash, 64) && equal(payloadHash, row.payload_hash), "操作内容已变化，请重新确认", 409);
+    const plan = JSON.parse(row.payload_json);
+    assert(!row.action_type || row.action_type === plan.type, "操作内容不一致，请重新提出", 409);
+    enforceAgentPolicy(user, "student.tool", audit, plan.type, row.user_id);
     const locked = await env.DB.prepare("UPDATE student_plans SET status='running' WHERE id=? AND user_id=? AND status='pending'").bind(planId, user.id).run();
     assert(locked.meta.changes === 1, "操作已在执行中", 409);
-    const plan = JSON.parse(row.payload_json);
     audit.action = "agent_execute"; audit.targets = plan.type + " plan:" + planId;
     try {
       if (plan.type === "prepare_submit") {
@@ -1811,7 +1859,7 @@ async function handleRequest(request, env, audit) {
       response = await managementRecords(request, env, path, user)
         || await officeRoutes(request, env, path, user, audit)
         || await agentRoutes(request, env, path, user, audit)
-        || await mentorRoutes(request, env, path, user)
+        || await mentorRoutes(request, env, path, user, audit)
         || await studentRoutes(request, env, path, user)
         || await checkRoutes(request, env, path, user, audit)
         || await formRoutes(request, env, path, user)
@@ -1831,7 +1879,7 @@ export default {
     const response = await handleRequest(request, env, audit);
     if (ctx && path.startsWith("/api/")) {
       const action = audit.action || (/^[/]api[/][a-z0-9/-]{1,120}$/.test(path) ? path : "/api/unknown");
-      ctx.waitUntil(Promise.resolve().then(() => auditStatement(env, audit.user, action, request.method, response.status, audit.targets).run())
+      ctx.waitUntil(Promise.resolve().then(() => auditStatement(env, audit.user, action, request.method, response.status, audit.targets, audit.policyDecision, audit.policyReason).run())
         .catch(error => console.error("audit write failed", error?.name)));
     }
     return response;
