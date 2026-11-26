@@ -1022,7 +1022,7 @@ function notificationsPage() {
       });
       const row = make("div", { className: "notice-item" + (item.is_read ? " read" : "") },
         make("span", { className: "notice-dot" }),
-        make("div", {}, make("h2", { text: item.title }), p(item.content), make("time", { text: item.created_at }), make("p", { className: "small", role: "status" })),
+        make("div", {}, make("h2", { text: item.title }), p(item.content), make("time", { text: displayTime(item.created_at) }), make("p", { className: "small", role: "status" })),
         item.is_read ? null : read);
       shell.append(panel(row));
     }
@@ -1762,7 +1762,7 @@ function showStudent(student, data) {
         make("td", { text: file.stage_name }), make("td", { text: file.material_name }),
         make("td", {}, make("a", { href: "/api/checks/" + file.id + "/file", text: file.filename })),
         make("td", { text: file.review_status || "待审阅" }),
-        make("td", { text: file.checked_at })))));
+        make("td", { text: displayTime(file.checked_at) })))));
     filesPanel.replaceChildren(make("div", { className: "panel-head" }, make("h2", { text: "已提交文件" }), make("span", { className: "small", text: result.files.length + " 份" })),
       result.files.length ? tableWrap(table) : make("div", { className: "empty-state" }, "这名学生尚未提交文件。"));
   } catch (error) { filesPanel.replaceChildren(notice(error.message, "error")); } })();
