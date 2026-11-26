@@ -618,8 +618,8 @@ table.data .secondary { min-height: 36px; padding: 6px 14px; text-decoration: no
 .result-row p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 
 /* ---------- 通知 ---------- */
-.notice-item { display: grid; grid-template-columns: 2px minmax(0, 1fr) auto; gap: 18px; align-items: start; overflow-wrap: anywhere; }
-.notice-dot { height: 36px; border-radius: 1px; background: var(--accent); }
+.notice-item { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 18px; align-items: start; overflow-wrap: anywhere; }
+.notice-dot { width: 8px; height: 8px; margin-top: 7px; border-radius: 50%; background: var(--accent); }
 .notice-item.read .notice-dot { background: var(--line-strong); }
 .notice-item h2 { margin: 0 0 5px; font-size: 18px; }
 .notice-item p { margin: 0; color: var(--muted); white-space: pre-wrap; }

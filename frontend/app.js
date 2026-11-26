@@ -346,16 +346,6 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
       button(includeInvite ? "返回登录" : "辅导员注册", () => navigate(includeInvite ? "login" : "register"), "linklike")));
   card.classList.add("auth-card");
   const story = make("div", { className: "auth-story" },
-    make("div", { className: "orbit-field", "aria-hidden": "true" },
-      make("span", { className: "orbit-ring orbit-ring-one" }),
-      make("span", { className: "orbit-ring orbit-ring-two" }),
-      make("span", { className: "orbit-ring orbit-ring-three" }),
-      make("span", { className: "orbit-center" }),
-      make("span", { className: "orbit-node orbit-node-one" }),
-      make("span", { className: "orbit-node orbit-node-two" }),
-      make("span", { className: "orbit-node orbit-node-three" }),
-      make("span", { className: "orbit-node orbit-node-four" }),
-      make("span", { className: "orbit-node orbit-node-five" })),
     make("div", { className: "auth-story-copy" },
       make("span", { className: "story-intro", text: "中国民航大学 / 培养流程" }),
       make("h1", {}, "党员发展计划", make("br"), "辅助系统"),
@@ -518,6 +508,47 @@ function preloadGirlFrames() {
 function mentorGirl() {
   preloadGirlFrames();
   return make("img", { src: "/girl/frame_0.webp", alt: "", className: "mentor-girl-img", draggable: "false" });
+}
+
+// 通用拖拽：按住 handle 可拖动 target，在视口内自由移动；返回 moved 状态供点击/拖拽区分。
+function makeDraggable(handle, target) {
+  const state = { moved: false, dragging: false, startX: 0, startY: 0, originLeft: 0, originTop: 0 };
+  const onMove = event => {
+    if (!state.dragging) return;
+    const dx = event.clientX - state.startX, dy = event.clientY - state.startY;
+    if (!state.moved && Math.hypot(dx, dy) < 4) return;
+    state.moved = true;
+    target.style.left = Math.max(120 - target.offsetWidth, Math.min(state.originLeft + dx, window.innerWidth - 120)) + "px";
+    target.style.top = Math.max(8, Math.min(state.originTop + dy, window.innerHeight - 56)) + "px";
+  };
+  const onUp = () => {
+    if (!state.dragging) return;
+    state.dragging = false;
+    handle.classList.remove("mentor-panel-dragging");
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onUp);
+    document.removeEventListener("pointercancel", onUp);
+  };
+  handle.addEventListener("pointerdown", event => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    const rect = target.getBoundingClientRect();
+    if (rect.width >= window.innerWidth - 1 && rect.height >= window.innerHeight - 1) return; // 全屏不拖拽
+    state.dragging = true;
+    state.moved = false;
+    state.startX = event.clientX;
+    state.startY = event.clientY;
+    state.originLeft = rect.left;
+    state.originTop = rect.top;
+    target.style.left = rect.left + "px";
+    target.style.top = rect.top + "px";
+    target.style.right = "auto";
+    target.style.bottom = "auto";
+    handle.classList.add("mentor-panel-dragging");
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+  });
+  return state;
 }
 
 function rosterEditor(initial, alive, onDone) {
@@ -746,30 +777,7 @@ function mentorPage() {
         make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })));
     // 悬浮窗拖拽：按住顶部小女孩 + 标题框拖动整个面板，在视口内自由移动
     const panelEl = document.getElementById("mentorPanel");
-    if (panelEl) {
-      let dragging = null;
-      hero.addEventListener("pointerdown", event => {
-        const rect = panelEl.getBoundingClientRect();
-        if (rect.width >= window.innerWidth - 1 && rect.height >= window.innerHeight - 1) return; // 全屏(移动端/窄窗)不拖拽
-        dragging = { startX: event.clientX, startY: event.clientY, left: rect.left, top: rect.top, width: rect.width, height: rect.height };
-        panelEl.style.left = rect.left + "px";
-        panelEl.style.top = rect.top + "px";
-        panelEl.style.right = "auto";
-        panelEl.style.bottom = "auto";
-        hero.setPointerCapture(event.pointerId);
-        hero.classList.add("mentor-panel-dragging");
-      });
-      hero.addEventListener("pointermove", event => {
-        if (!dragging) return;
-        const left = Math.max(140 - dragging.width, Math.min(dragging.left + event.clientX - dragging.startX, window.innerWidth - 140));
-        const top = Math.max(8, Math.min(dragging.top + event.clientY - dragging.startY, window.innerHeight - 80));
-        panelEl.style.left = left + "px";
-        panelEl.style.top = top + "px";
-      });
-      const endDrag = () => { if (dragging) { dragging = null; hero.classList.remove("mentor-panel-dragging"); } };
-      hero.addEventListener("pointerup", endDrag);
-      hero.addEventListener("pointercancel", endDrag);
-    }
+    if (panelEl) makeDraggable(hero, panelEl);
     const header = make("header", { className: "mentor-topbar" }, make("div", { className: "mentor-topbar-left" }, menu, newChat()));
     if (staffAgent) {
       fileInput.multiple = true;
@@ -1778,7 +1786,10 @@ async function init() {
     await refreshUnreadNotifications();
     render();
     const fab = document.getElementById("mentorFab");
-    if (fab) fab.addEventListener("click", () => mentorPanelOpen ? closeMentor() : openMentor());
+    if (fab) {
+      const fabDrag = makeDraggable(fab, fab);
+      fab.addEventListener("click", () => { if (fabDrag.moved) { fabDrag.moved = false; return; } mentorPanelOpen ? closeMentor() : openMentor(); });
+    }
     const close = document.getElementById("mentorPanelClose");
     if (close) close.addEventListener("click", closeMentor);
     document.addEventListener("keydown", event => { if (event.key === "Escape" && mentorPanelOpen) closeMentor(); });

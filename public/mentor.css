@@ -15,7 +15,7 @@
   border: 0;
   padding: 0;
   background: transparent;
-  cursor: pointer;
+  cursor: grab;
 }
 .mentor-fab-girl {
   display: block;
@@ -48,6 +48,9 @@
 }
 .mentor-fab:active { transform: translateY(1px); }
 .mentor-fab--open .mentor-fab-label { background: var(--accent, #a51f2d); border-color: var(--accent, #a51f2d); color: #fff; }
+.mentor-fab--open .mentor-fab-girl { display: none; }
+.mentor-fab.mentor-panel-dragging { cursor: grabbing; }
+.mentor-fab.mentor-panel-dragging, .mentor-fab.mentor-panel-dragging * { user-select: none; -webkit-user-select: none; }
 
 /* ---------- 悬浮面板 ---------- */
 .mentor-panel {

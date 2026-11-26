@@ -220,7 +220,7 @@ input, select, textarea, button { max-width: 100%; }
   table.data th { white-space: nowrap; }
   .bulk-select { position: sticky; left: 0; z-index: 2; background: var(--surface); }
 
-  .notice-item { grid-template-columns: 2px minmax(0, 1fr); gap: 12px; }
+  .notice-item { grid-template-columns: 8px minmax(0, 1fr); gap: 12px; }
   .notice-item time, .notice-item button { grid-column: 2; justify-self: start; }
   .form-item { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .form-actions { justify-content: stretch; }
