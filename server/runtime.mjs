@@ -130,9 +130,13 @@ class StaticAssets {
     catch { return new Response("Not found", { status: 404 }); }
     try {
       const contents = await readFile(target);
+      const ext = extname(target).toLowerCase();
+      const cacheControl = relative === "index.html" ? "no-cache"
+        : [".js", ".css", ".mjs", ".map"].includes(ext) ? "no-cache"
+          : "public, max-age=86400";
       return new Response(contents, { headers: {
-        "content-type": mimeTypes[extname(target).toLowerCase()] || "application/octet-stream",
-        "cache-control": relative === "index.html" ? "no-cache" : "public, max-age=3600"
+        "content-type": mimeTypes[ext] || "application/octet-stream",
+        "cache-control": cacheControl
       } });
     } catch (error) {
       if (error?.code === "ENOENT" || error?.code === "EISDIR") return new Response("Not found", { status: 404 });

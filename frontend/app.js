@@ -749,8 +749,8 @@ function mentorPage() {
     if (panelEl) {
       let dragging = null;
       hero.addEventListener("pointerdown", event => {
-        if (window.innerWidth <= 640) return;
         const rect = panelEl.getBoundingClientRect();
+        if (rect.width >= window.innerWidth - 1 && rect.height >= window.innerHeight - 1) return; // 全屏(移动端/窄窗)不拖拽
         dragging = { startX: event.clientX, startY: event.clientY, left: rect.left, top: rect.top, width: rect.width, height: rect.height };
         panelEl.style.left = rect.left + "px";
         panelEl.style.top = rect.top + "px";
