@@ -985,12 +985,27 @@ export async function adminRoutes(request, env, path, user, audit = {}) {
     return json({ ok: true });
   }
   if (path === "/api/admin/notifications" && request.method === "POST") {
-    const data = await bodyJson(request), student = await targetStudent(env, user, data.studentId);
-    audit.targets = String(student.id);
+    const data = await bodyJson(request);
     const title = clean(data.title, 200), content = clean(data.content, 2000);
     assert(title && content, "标题和内容不能为空");
-    await env.DB.prepare("INSERT INTO notifications(student_id,kind,title,content) VALUES(?,'lesson',?,?)").bind(student.id, title, content).run();
-    return json({ ok: true }, 201);
+    let students;
+    if (data.studentId !== undefined) {
+      const student = await targetStudent(env, user, data.studentId);
+      students = [{ id: student.id }];
+    } else {
+      const audience = data.audience && typeof data.audience === "object" && !Array.isArray(data.audience) ? data.audience : {};
+      students = await officeAudience(env, user, { type: "send_notifications", audience }, 500);
+      assert(students.length && students.length <= 500, "收件人须为 1 至 500 名学生，请缩小范围");
+      if (user.role !== "admin") {
+        const allowed = await env.DB.prepare("SELECT u.id FROM users u LEFT JOIN classes cl ON cl.id=u.class_id WHERE u.role='student' AND u.deleted_at IS NULL AND cl.major_id=?").bind(user.major_id).all();
+        const ids = new Set(allowed.results.map(row => row.id));
+        students = students.filter(student => ids.has(student.id));
+        assert(students.length, "所选范围内没有你负责专业的学生");
+      }
+    }
+    audit.targets = students.length > 1 ? students.length + " 名学生" : String(students[0].id);
+    await env.DB.batch(students.map(student => env.DB.prepare("INSERT INTO notifications(student_id,kind,title,content) VALUES(?,'lesson',?,?)").bind(student.id, title, content)));
+    return json({ ok: true, count: students.length }, 201);
   }
   return null;
 }

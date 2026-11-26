@@ -48,7 +48,6 @@
 }
 .mentor-fab:active { transform: translateY(1px); }
 .mentor-fab--open .mentor-fab-label { background: var(--accent, #a51f2d); border-color: var(--accent, #a51f2d); color: #fff; }
-.mentor-fab--open .mentor-fab-girl { display: none; }
 
 /* ---------- 悬浮面板 ---------- */
 .mentor-panel {
@@ -189,6 +188,31 @@
   height: 180px;
   pointer-events: none;
 }
+.mentor-hero-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 6;
+  width: 28px; height: 28px; padding: 0;
+  pointer-events: auto;
+  border: 1px solid var(--line, #e8e1e1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .78);
+  color: var(--muted, #6b5f62);
+  font-size: 17px; line-height: 1; cursor: pointer;
+}
+.mentor-hero-close:hover { color: var(--accent, #a51f2d); border-color: rgba(165, 31, 45, .45); background: #fff; }
+.mentor-hero-restore {
+  pointer-events: auto;
+  width: 30px; height: 30px; padding: 0;
+  border: 1px solid var(--line, #e8e1e1); border-radius: 8px;
+  background: rgba(255, 255, 255, .78); color: var(--muted, #6b5f62);
+  font-size: 17px; line-height: 1; cursor: pointer;
+}
+.mentor-hero-restore:hover { color: var(--accent, #a51f2d); }
+.mentor-hero-restore[hidden] { display: none; }
+.mentor-app.hero-collapsed .mentor-hero { display: none; }
+.mentor-app.hero-collapsed .mentor-thread { padding-top: 64px; }
 .mentor-girl {
   position: absolute;
   top: 0;

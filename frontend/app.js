@@ -209,7 +209,7 @@ function nav() {
   const active = location.hash.slice(1) || (me ? me.role === "student" ? "profile" : "admin" : "login");
   const items = me?.must_change_password ? [["password", "设置新密码"]] : me ? (me.role === "student"
     ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ...(me.is_monitor ? [["checks", "班级材料"]] : []), ["mentor", "成长导师"], ["notifications", "通知"]]
-    : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"]])
+    : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"], ["operations", "操作记录"], ["recycle", "回收站"]])
     : (config?.initialized ? [] : [["bootstrap", "初始化"]]);
   const scroll = make("div", { className: "nav-scroll" });
   for (const [page, label] of items) {
@@ -225,10 +225,6 @@ function nav() {
       make("summary", { text: "个人资料", "aria-label": "个人资料菜单" }),
       make("div", { className: "nav-profile-menu" },
         make("div", { className: "nav-profile-name", text: me.name || me.username }),
-        ...(isStaffUser() && !me.must_change_password ? [
-          make("a", { href: "#operations", text: "操作记录" }),
-          make("a", { href: "#recycle", text: "回收站" })
-        ] : []),
         make("a", { href: "#password", text: "修改密码" }),
         button("退出", logout, "linklike")));
     navigation.append(profileMenu);
@@ -729,12 +725,19 @@ function mentorPage() {
       };
       girlRaf = requestAnimationFrame(step);
     };
+    const collapseHero = make("button", { type: "button", className: "mentor-hero-close", "aria-label": "收起顶部", title: "收起顶部", text: "×" });
+    const expandHero = make("button", { type: "button", className: "mentor-hero-restore", "aria-label": "展开顶部", title: "展开顶部", text: "＋", hidden: "" });
+    const setHeroCollapsed = collapsed => { shell.classList.toggle("hero-collapsed", collapsed); expandHero.hidden = !collapsed; };
+    collapseHero.onclick = () => setHeroCollapsed(true);
+    expandHero.onclick = () => setHeroCollapsed(false);
     const hero = make("div", { className: "mentor-hero" },
+      collapseHero,
       make("div", { className: "mentor-girl", "aria-hidden": "true" }, girlImg),
       make("div", { className: "mentor-titlebox" },
         make("strong", { text: mentorTitle() }),
         make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })));
-    const header = make("header", { className: "mentor-topbar" }, make("div", { className: "mentor-topbar-left" }, menu, newChat()));
+    const header = make("header", { className: "mentor-topbar" },
+      make("div", { className: "mentor-topbar-left" }, menu, newChat(), expandHero));
     if (staffAgent) {
       fileInput.multiple = true;
       fileInput.accept = officeAccept;
@@ -1624,11 +1627,32 @@ function adminPage() {
       metric("班级", String(visibleClasses.length), me.role === "admin" ? "全部班级" : "本专业班级"),
       ...(me.role === "admin" ? [metric("专业", String(data.majors.length), "已配置专业"), metric("学院", String(data.colleges.length), "已配置学院")] : []),
       ...(me.role === "admin" ? [metric("有效邀请", String(data.invites.filter(x => x.role === "counselor" && !x.used_by && new Date(x.expires_at) > new Date()).length), "未使用的辅导员邀请码", true)] : []));
+    const notifyTargets = [
+      ...(me.role === "counselor"
+        ? [["major:" + me.major_id, "本专业全部学生"]]
+        : data.majors.map(m => ["major:" + m.id, "专业 · " + m.name])),
+      ...visibleClasses.map(c => ["class:" + c.id, "班级 · " + c.name])
+    ];
+    const notifyForm = make("form", { className: "form-grid" },
+      field("通知标题", "title", "text", true, "重要提醒"),
+      make("label", { className: "field wide" }, make("span", { text: "通知内容" }), make("textarea", { name: "content", required: "", rows: 4, placeholder: "填写通知正文" })),
+      select("收件范围", "target", notifyTargets, notifyTargets[0]?.[0]),
+      make("button", { className: "btn", type: "submit", text: "发送站内通知" }));
+    notifyForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      const release = busy(notifyForm);
+      try {
+        const values = formData(notifyForm);
+        const [kind, raw] = (values.target || "").split(":");
+        const audience = kind === "class" ? { classId: Number(raw) } : kind === "major" ? { majorId: Number(raw) } : {};
+        const result = await post("/api/admin/notifications", { title: values.title, content: values.content, audience });
+        feedback(notifyForm, "已发送给 " + result.count + " 名学生。", "success");
+      } catch (error) { feedback(notifyForm, error.message); }
+      finally { release(); }
+    });
     shell.replaceChildren(pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"),
-      make("div", { className: "upload-actions" },
-        make("a", { href: "#operations", className: "secondary", text: "操作记录" }),
-        make("a", { href: "#recycle", className: "secondary", text: "回收站" })),
       metrics,
+      panel(make("div", { className: "panel-head" }, make("h2", { text: "发送站内通知" }), make("span", { className: "small", text: "手动向学生发送站内信。" })), notifyForm),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "检索学生" })), searchForm),
       ...(addStudentForm ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "手动添加学生" }), make("span", { className: "small", text: "单独添加一名学生到班级，初始密码 cauc+学号。" })), addStudentForm)] : []),
       ...(me.role === "admin" ? [
