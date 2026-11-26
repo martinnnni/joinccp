@@ -213,7 +213,7 @@ function nav() {
   const active = location.hash.slice(1) || (me ? me.role === "student" ? "profile" : "admin" : "login");
   const items = me?.must_change_password ? [["password", "设置新密码"]] : me ? (me.role === "student"
     ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ...(me.is_monitor ? [["checks", "班级材料"]] : []), ["mentor", "成长导师"], ["notifications", "通知"]]
-    : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"], ["hierarchy", "管理体系"], ["operations", "操作记录"], ["recycle", "回收站"]])
+    : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"], ["hierarchy", "管理体系"], ["recycle", "回收站"]])
     : (config?.initialized ? [] : [["bootstrap", "初始化"]]);
   const scroll = make("div", { className: "nav-scroll" });
   for (const [page, label] of items) {
@@ -229,6 +229,7 @@ function nav() {
       make("summary", { text: "个人资料", "aria-label": "个人资料菜单" }),
       make("div", { className: "nav-profile-menu" },
         make("div", { className: "nav-profile-name", text: me.name || me.username }),
+        make("a", { href: "#operations", text: "操作记录" }),
         make("a", { href: "#password", text: "修改密码" }),
         button("退出", logout, "linklike")));
     navigation.append(profileMenu);
@@ -295,7 +296,7 @@ function render() {
   else if (page === "forms") root.replaceChildren(formsPage());
   else if (page === "checks" && me.role === "student" && me.is_monitor) root.replaceChildren(checksPage(true));
   else if (me.role === "student") root.replaceChildren(
-    page === "check" ? checkPage() : page === "mentor" ? mentorPage() : page === "notifications" ? notificationsPage() : profilePage());
+    page === "check" ? checkPage() : page === "mentor" ? mentorPage() : page === "notifications" ? notificationsPage() : page === "operations" ? recordsPage("operations") : profilePage());
   else root.replaceChildren(page === "checks" ? checksPage() : page === "hierarchy" ? hierarchyPage() : ["operations", "recycle"].includes(page) ? recordsPage(page) : adminPage());
   if (operationFeedback) {
     root.prepend(make("p", { className: "form-feedback operation-result", role: "status", "data-kind": "success", text: operationFeedback }));
@@ -393,7 +394,7 @@ function recordsPage(page) {
   const description = recycle ? "恢复已移除的账号及其档案。" : "查询访问、提交及后台操作，时间使用北京时间。";
   const body = make("div");
   const rows = make("tbody");
-  const columns = recycle ? ["账号", "角色", "班级", "移除时间", "操作"] : ["时间", "操作者", "操作", "HTTP 状态", "策略决策", "对象编号"];
+  const columns = recycle ? ["账号", "角色", "班级", "移除时间", "操作"] : ["时间", "操作者", "操作", "IP", "对象"];
   const table = tableWrap(make("table", { className: "data" }, make("thead", {}, make("tr", {}, columns.map(text => make("th", { text })))), rows));
   let cursor = "";
   const more = button("加载更多", load, "secondary");
@@ -414,6 +415,7 @@ function recordsPage(page) {
         ] : [
           displayTime(item.occurred_at), item.actor_name || item.actor_role || "访客",
           ({
+            login: "登录", submit_check: "提交材料",
             archive_student: "学生移入回收站", archive_counselor: "辅导员移入回收站", restore_account: "恢复账号",
             view_profile: "查看培养档案", view_check: "打开材料提交", view_checks: "查看审阅队列",
             view_forms: "打开资料下载", view_notifications: "查看通知", view_admin: "打开工作台",
@@ -424,7 +426,7 @@ function recordsPage(page) {
             dialog_confirm: "确认操作", dialog_cancel: "取消操作", download_official_form: "下载公开表格",
             daily_reminders: "执行定时提醒"
           })[item.action] || item.method + " " + item.action,
-          String(item.status), item.policy_decision ? (item.policy_decision === "allow" ? "允许" : "拒绝") + (item.policy_reason && item.policy_reason !== "allowed" ? " · " + item.policy_reason : "") : "—", item.targets || "—"
+          item.ip || "—", item.targets || "—"
         ];
         rows.append(make("tr", {}, cells.map(value => make("td", {}, value))));
       }

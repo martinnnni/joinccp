@@ -198,6 +198,7 @@ async function authRoutes(request, env, path, audit) {
     assert(row && equal(row.password_verifier, got), "用户名或密码错误", 401);
     await env.DB.prepare("DELETE FROM login_attempts WHERE key=?").bind(limitKey).run();
     audit.user = { id: row.id, role: row.role };
+    audit.action = "login";
     return json({ ok: true }, 200, { "set-cookie": await startSession(env, row.id) });
   }
   if (path === "/api/logout" && request.method === "POST") {
@@ -509,7 +510,8 @@ export async function checkRoutes(request, env, path, user, audit = {}) {
           materialRecord
         ]);
       }
-      audit.targets = "check:" + checkId;
+      audit.action = "submit_check";
+      audit.targets = material.name;
       return json({ ok: true, id: checkId, results }, 201);
     } catch (error) {
       if (checkId) await env.DB.prepare("DELETE FROM checks WHERE id=?").bind(checkId).run();
@@ -664,9 +666,9 @@ async function registerCounselors(env, user, data) {
   return json({ ok: true, count: counselors.length }, 201);
 }
 
-function auditStatement(env, user, action, method, status, targets = null, policyDecision = null, policyReason = null) {
-  return env.DB.prepare("INSERT INTO operation_logs(actor_id,actor_role,action,method,status,targets,policy_decision,policy_reason) VALUES(?,?,?,?,?,?,?,?)")
-    .bind(user?.id ?? null, user?.role ?? null, action, method, status, targets, policyDecision, policyReason);
+function auditStatement(env, user, action, method, status, targets = null, policyDecision = null, policyReason = null, ip = null) {
+  return env.DB.prepare("INSERT INTO operation_logs(actor_id,actor_role,action,method,status,targets,policy_decision,policy_reason,ip) VALUES(?,?,?,?,?,?,?,?,?)")
+    .bind(user?.id ?? null, user?.role ?? null, action, method, status, targets, policyDecision, policyReason, ip);
 }
 
 async function archiveUsers(env, user, ids, role, finish) {
@@ -682,7 +684,6 @@ async function archiveUsers(env, user, ids, role, finish) {
 
 async function managementRecords(request, env, path, user) {
   if (!["/api/admin/operation-logs", "/api/admin/recycle", "/api/admin/recycle/restore"].includes(path)) return null;
-  assert(isStaff(user), "仅工作人员可查看", 403);
   if (path === "/api/admin/operation-logs" && request.method === "GET") {
     const before = new URL(request.url).searchParams.get("before");
     const scope = user.role === "admin" ? "" : " AND l.actor_id=?";
@@ -690,6 +691,7 @@ async function managementRecords(request, env, path, user) {
       scope + " ORDER BY l.id DESC LIMIT 51").bind(before ? id(before) : Number.MAX_SAFE_INTEGER, ...(scope ? [user.id] : [])).all();
     return json({ ok: true, logs: results.slice(0, 50), next: results.length > 50 ? results[49].id : null });
   }
+  assert(isStaff(user), "仅工作人员可查看", 403);
   const scope = user.role === "admin" ? "" : " AND u.role='student' AND cl.major_id IN (SELECT id FROM majors WHERE grade_id=?)";
   const args = scope ? [user.grade_id] : [];
   if (path === "/api/admin/recycle" && request.method === "GET") {
@@ -1877,9 +1879,9 @@ export default {
     const path = new URL(request.url).pathname;
     const audit = {};
     const response = await handleRequest(request, env, audit);
-    if (ctx && path.startsWith("/api/")) {
-      const action = audit.action || (/^[/]api[/][a-z0-9/-]{1,120}$/.test(path) ? path : "/api/unknown");
-      ctx.waitUntil(Promise.resolve().then(() => auditStatement(env, audit.user, action, request.method, response.status, audit.targets, audit.policyDecision, audit.policyReason).run())
+    if (ctx && path.startsWith("/api/") && audit.action) {
+      const ip = clean(request.headers.get("X-Forwarded-For")?.split(",")[0] || request.headers.get("CF-Connecting-IP") || "", 64) || null;
+      ctx.waitUntil(Promise.resolve().then(() => auditStatement(env, audit.user, audit.action, request.method, response.status, audit.targets, audit.policyDecision, audit.policyReason, ip).run())
         .catch(error => console.error("audit write failed", error?.name)));
     }
     return response;

@@ -212,14 +212,13 @@ test("材料断线重试只写入一次，并保留上一版本", async t => {
   assert.deepEqual(deleted, []);
 });
 
-test("无权限的请求也留下记录，查询参数不写入", async t => {
+test("无权限的请求不留下记录", async t => {
   const { db, env } = setup(t);
   const jobs = [];
   const result = await worker.fetch(new Request("https://example.test/api/admin/recycle?value=secret"), env, { waitUntil: job => jobs.push(job) });
   assert.equal(result.status, 401);
   await Promise.all(jobs);
-  const row = db.prepare("SELECT action,method,status,actor_id FROM operation_logs").get();
-  assert.deepEqual({ ...row }, { action: "/api/admin/recycle", method: "GET", status: 401, actor_id: null });
+  assert.equal(db.prepare("SELECT count(*) AS n FROM operation_logs").get().n, 0);
 });
 
 test("辅导员只能恢复自己专业的学生，恢复结果与访问审计可查询", async t => {
@@ -245,5 +244,4 @@ test("辅导员只能恢复自己专业的学生，恢复结果与访问审计�
   assert.equal(db.prepare("SELECT deleted_at FROM users WHERE id=11").get().deleted_at, null);
   const logs = await (await call("operation-logs")).json();
   assert.ok(logs.logs.some(row => row.action === "restore_account" && row.targets === "11"));
-  assert.ok(logs.logs.some(row => row.action === "/api/admin/recycle/restore" && row.status === 404));
 });
