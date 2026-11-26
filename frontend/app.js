@@ -502,8 +502,21 @@ function profilePage() {
   return shell;
 }
 
+const girlFrameCount = 8;
+let girlFramesReady = null;
+function preloadGirlFrames() {
+  if (!girlFramesReady) {
+    girlFramesReady = Promise.all(Array.from({ length: girlFrameCount }, (_, i) => {
+      const img = new Image();
+      img.decoding = "async";
+      img.src = "/girl/frame_" + i + ".webp";
+      return img.decode().catch(() => {});
+    })).then(() => true);
+  }
+  return girlFramesReady;
+}
 function mentorGirl() {
-  for (let i = 1; i <= 7; i++) { const img = new Image(); img.src = "/girl/frame_" + i + ".webp"; }
+  preloadGirlFrames();
   return make("img", { src: "/girl/frame_0.webp", alt: "", className: "mentor-girl-img", draggable: "false" });
 }
 
@@ -694,28 +707,69 @@ function mentorPage() {
       make("div", { className: "mentor-sidebar-bottom" }, make("span", { text: "当前会话" }), make("strong", { text: me?.name || me?.username || "学生" })));
     const menu = make("details", { className: "mentor-mobile-menu" }, make("summary", { "aria-label": "打开工作区菜单" }, icon("M4 7h16 M4 12h16 M4 17h16", "菜单")), make("nav", { "aria-label": "学生工作区" }, navLinks()));
     const girlImg = mentorGirl();
-    let girlTimers = [];
+    let girlRaf = 0;
     const setGirlFrame = n => { girlImg.src = "/girl/frame_" + n + ".webp"; };
-    const clearGirlTimers = () => { girlTimers.forEach(clearTimeout); girlTimers = []; };
+    const stopGirl = () => { if (girlRaf) cancelAnimationFrame(girlRaf); girlRaf = 0; };
+    // 用 requestAnimationFrame 驱动帧动画：与显示器刷新同步，比 setTimeout 更可靠，
+    // 且帧图在 mentorGirl() 已预解码，低配机上不会因解码卡顿而看不到动画。
     const playGirlTyping = () => {
-      clearGirlTimers();
-      let i = 1;
-      const introDurs = [320, 300, 260, 240];
-      const step = () => {
-        if (i <= 4) { setGirlFrame(i); girlTimers.push(setTimeout(step, introDurs[i - 1])); i++; }
-        else { let t = 0; const loop = () => { setGirlFrame(5 + (t % 3)); t++; girlTimers.push(setTimeout(loop, 240)); }; loop(); }
+      stopGirl();
+      const start = performance.now();
+      const intro = [320, 300, 260, 240];
+      const loopDur = 240;
+      const step = now => {
+        const elapsed = now - start;
+        let frame;
+        let introTotal = 0;
+        for (let i = 0; i < 4; i++) { introTotal += intro[i]; if (elapsed < introTotal) { frame = 1 + i; break; } }
+        if (frame === undefined) frame = 5 + Math.floor(((elapsed - introTotal) / loopDur) % 3);
+        setGirlFrame(frame);
+        girlRaf = requestAnimationFrame(step);
       };
-      step();
+      girlRaf = requestAnimationFrame(step);
     };
     const playGirlBack = () => {
-      clearGirlTimers();
-      [4, 3, 2, 1, 0].forEach((n, idx) => { girlTimers.push(setTimeout(() => setGirlFrame(n), idx * 180)); });
+      stopGirl();
+      const start = performance.now();
+      const backDur = 180;
+      const step = now => {
+        const idx = Math.min(4, Math.floor((now - start) / backDur));
+        setGirlFrame(4 - idx);
+        if (idx < 4) girlRaf = requestAnimationFrame(step);
+      };
+      girlRaf = requestAnimationFrame(step);
     };
     const hero = make("div", { className: "mentor-hero" },
       make("div", { className: "mentor-girl", "aria-hidden": "true" }, girlImg),
       make("div", { className: "mentor-titlebox" },
         make("strong", { text: mentorTitle() }),
         make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })));
+    // 悬浮窗拖拽：按住顶部小女孩 + 标题框拖动整个面板，在视口内自由移动
+    const panelEl = document.getElementById("mentorPanel");
+    if (panelEl) {
+      let dragging = null;
+      hero.addEventListener("pointerdown", event => {
+        if (window.innerWidth <= 640) return;
+        const rect = panelEl.getBoundingClientRect();
+        dragging = { startX: event.clientX, startY: event.clientY, left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+        panelEl.style.left = rect.left + "px";
+        panelEl.style.top = rect.top + "px";
+        panelEl.style.right = "auto";
+        panelEl.style.bottom = "auto";
+        hero.setPointerCapture(event.pointerId);
+        hero.classList.add("mentor-panel-dragging");
+      });
+      hero.addEventListener("pointermove", event => {
+        if (!dragging) return;
+        const left = Math.max(140 - dragging.width, Math.min(dragging.left + event.clientX - dragging.startX, window.innerWidth - 140));
+        const top = Math.max(8, Math.min(dragging.top + event.clientY - dragging.startY, window.innerHeight - 80));
+        panelEl.style.left = left + "px";
+        panelEl.style.top = top + "px";
+      });
+      const endDrag = () => { if (dragging) { dragging = null; hero.classList.remove("mentor-panel-dragging"); } };
+      hero.addEventListener("pointerup", endDrag);
+      hero.addEventListener("pointercancel", endDrag);
+    }
     const header = make("header", { className: "mentor-topbar" }, make("div", { className: "mentor-topbar-left" }, menu, newChat()));
     if (staffAgent) {
       fileInput.multiple = true;
