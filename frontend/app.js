@@ -800,9 +800,10 @@ function mentorPage() {
         }
         const result = structuredRoster?.length
           ? { ...await post("/api/office/roster-preview", { rows: structuredRoster }), answer: "请逐行核对名单，选择班级后校验。" }
-          : await post("/api/office/plan", { question, documentText: documentText.slice(0, 25000), files: files.map(file => ({ name: file.name })), history: officeHistory.slice(-6) });
+          : await post("/api/office/plan", { question, documentText: documentText.slice(0, 25000), files: files.map(file => ({ name: file.name })), history: officeHistory.slice(-12) });
         if (!alive()) return;
         officeHistory.push({ role: "user", content: question }, { role: "assistant", content: result.answer });
+        if (officeHistory.length > 24) officeHistory = officeHistory.slice(-24);
         loading.remove();
         const row = appendMessage({ role: "assistant", content: result.answer + (result.plan ? "\n\n待确认操作\n" + result.plan.preview : "") });
         if (result.roster) row.querySelector(".mentor-bubble").append(rosterEditor(result.roster, alive, message => {
@@ -839,7 +840,6 @@ function mentorPage() {
               progress.remove();
               pendingOfficePlan = null;
               pendingOfficeButton = null;
-              officeHistory = [];
               clearFile();
               focusReplyTop(appendMessage({ role: "assistant", content: outcome.message + (temporaryPassword ? "\n\n本次临时密码（仅显示在此处）： " + temporaryPassword : "") }));
             } catch (error) {

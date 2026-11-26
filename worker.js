@@ -1145,6 +1145,10 @@ async function officeAudience(env, user, action, limit) {
     const majorId = id(filters.majorId);
     if (user.role !== "admin") assert(await env.DB.prepare("SELECT id FROM majors WHERE id=? AND grade_id=?").bind(majorId, user.grade_id).first(), "无权访问其他专业学生", 403);
     clauses.push("cl.major_id=?"); args.push(majorId);
+  } else if (filters.gradeId !== undefined) {
+    const gradeId = id(filters.gradeId);
+    if (user.role !== "admin") assert(gradeId === user.grade_id, "无权访问其他年级学生", 403);
+    clauses.push("cl.major_id IN (SELECT id FROM majors WHERE grade_id=?)"); args.push(gradeId);
   } else if (filters.classId !== undefined) {
     const classId = id(filters.classId);
     clauses.push("u.class_id=?"); args.push(classId);
@@ -1159,7 +1163,8 @@ async function officeAudience(env, user, action, limit) {
     clauses.push(column + "=?"); args.push(value);
   }
   if (action.type === "send_notifications") {
-    assert(["majorId", "classId", "stageSlug", "grade"].some(field => filters[field] !== undefined), "请提供收件人名单，或指定专业、班级、阶段或年级");
+    const hasTarget = filters.all === true || ["majorId", "classId", "stageSlug", "grade", "gradeId"].some(field => filters[field] !== undefined);
+    assert(hasTarget, "请提供收件人名单，或指定专业、班级、年级、阶段，或选择全体学生");
   }
   return (await env.DB.prepare("SELECT u.id,p.name,p.student_no,p.grade,p.current_stage_slug FROM users u JOIN profiles p ON p.user_id=u.id LEFT JOIN classes cl ON cl.id=u.class_id WHERE " +
     clauses.join(" AND ") + " ORDER BY p.student_no LIMIT ?").bind(...args, limit + 1).all()).results;
@@ -1231,6 +1236,14 @@ async function normalizeOfficeAction(env, user, action, files) {
     return { answer: results.length ? "最新材料提交记录\n" + results.slice(0, 20).map(row =>
       studentLabel(row) + " / " + row.material_name + " / " + row.filename + " / " + row.review_status).join("\n") +
       (results.length > 20 ? "\n这里只显示最近 20 份，可以指定学生缩小范围。" : "") : "没有找到符合条件的材料提交记录。" };
+  }
+  if (type === "list_counselors") {
+    const gradeId = action.gradeId === undefined ? null : id(action.gradeId);
+    let where = "u.role='counselor' AND u.deleted_at IS NULL", args = [];
+    if (user.role !== "admin") { where += " AND u.grade_id=?"; args.push(user.grade_id); }
+    else if (gradeId !== null) { where += " AND u.grade_id=?"; args.push(gradeId); }
+    const counselors = await env.DB.prepare("SELECT u.name,u.username,g.name AS grade_name FROM users u LEFT JOIN grades g ON g.id=u.grade_id WHERE " + where + " ORDER BY u.id").bind(...args).all();
+    return { answer: counselors.results.length ? "辅导员名单\n" + counselors.results.map(c => (c.name || c.username) + "（" + c.username + "） · " + (c.grade_name || "未分配年级")).join("\n") : "没有找到符合条件的辅导员。" };
   }
   if (["delete_students", "send_notifications", "advance_students", "list_students"].includes(type)) {
     const limit = type === "send_notifications" ? 50 : 20;
@@ -1460,7 +1473,7 @@ export async function officeRoutes(request, env, path, user, audit = {}) {
     const data = await bodyJson(request);
     const question = clean(data.question, 1000), documentText = clean(data.documentText, 25000);
     const files = Array.isArray(data.files) ? data.files.slice(0, 11).map(item => ({ name: clean(item?.name, 150) })) : [];
-    const history = Array.isArray(data.history) ? data.history.slice(-6) : [];
+    const history = Array.isArray(data.history) ? data.history.slice(-12) : [];
     assert(question || documentText || files.length, "请描述任务或上传文件");
     if (isIdentityQuestion(question)) return json({ ok: true, answer: "我是中国民航大学理学院独立开发的党员发展辅助系统。作为办公助理，我可以帮你整理和执行已确认的站内任务。", plan: null });
     if (isCurrentTimeQuestion(question)) return json({ ok: true, answer: getCurrentTime(), plan: null });
