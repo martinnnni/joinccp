@@ -393,6 +393,18 @@ body[data-page=bootstrap] .auth-form > .field:last-of-type { grid-column: 1/-1; 
   font: 700 clamp(38px, 4.6vw, 62px)/1.1 var(--display);
   letter-spacing: -.02em;
 }
+.page-title.greeting {
+  color: var(--accent);
+  font-family: 'STXingkai', 'Xingkai SC', 'KaiTi', 'STKaiti', '华文行楷', '楷体', serif;
+  font-weight: 500;
+  letter-spacing: .01em;
+}
+.greeting-line {
+  margin: 10px 0 0;
+  color: var(--accent);
+  font: 500 clamp(24px, 3vw, 34px)/1.2 'STXingkai', 'Xingkai SC', 'KaiTi', 'STKaiti', '华文行楷', '楷体', serif;
+  letter-spacing: .02em;
+}
 .page-head p { max-width: 440px; margin: 12px 0 0; color: var(--muted); font-size: 15px; }
 
 .panel {

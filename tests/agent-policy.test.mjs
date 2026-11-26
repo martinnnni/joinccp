@@ -48,6 +48,28 @@ test("guest personal query is stopped before model or personal database access",
   } finally { globalThis.fetch = oldFetch; }
 });
 
+test("guest can still ask a public question through the mentor chat", async () => {
+  const oldFetch = globalThis.fetch;
+  let modelCalls = 0;
+  globalThis.fetch = async (_url, options) => {
+    modelCalls++;
+    const payload = JSON.parse(options.body);
+    const content = payload.response_format ? '{"intent":"chitchat","reason":"公开写作建议"}' : "可以先说明申请动机，再结合个人经历展开。";
+    return Response.json({ choices: [{ message: { content } }] });
+  };
+  const env = { DEEPSEEK_API_KEY: "test", DB: {
+    prepare() { return { bind() { return this; }, async first() { return null; }, async run() { return { meta: { changes: 1 } }; } }; },
+    async batch() { return []; }
+  } };
+  const request = new Request("https://example.test/api/mentor/chat", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ question: "入党申请书如何组织结构？" }) });
+  try {
+    const result = await (await mentorRoutes(request, env, "/api/mentor/chat", null)).json();
+    assert.equal(result.route, "chitchat");
+    assert.match(result.answer, /申请动机/);
+    assert.equal(modelCalls, 2);
+  } finally { globalThis.fetch = oldFetch; }
+});
+
 test("student plan execution rechecks the stored action against the PEP", async () => {
   const user = { id: 7, role: "student" };
   const planId = "a".repeat(32), payloadHash = "b".repeat(64);

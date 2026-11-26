@@ -763,7 +763,6 @@ async function reviewChecks(env, user, data, finish = null) {
   const updates = [];
   for (const row of rows.results) {
     assert(user.role === "admin" || row.grade_id === user.grade_id, "无权审阅其他专业材料", 403);
-    assert(row.monitor_approved === 1, row.filename + "尚未经学生管理员审核", 409);
     assert(row.review_status === "待审阅", row.filename + "已审阅，请刷新列表", 409);
     const latest = await env.DB.prepare("SELECT id FROM checks WHERE student_id=? AND material_id=? ORDER BY id DESC LIMIT 1").bind(row.student_id, row.material_id).first();
     assert(latest?.id === row.id, row.filename + "已被新提交版本替代", 409);
@@ -772,7 +771,8 @@ async function reviewChecks(env, user, data, finish = null) {
   await env.DB.batch([...updates.flatMap(row => [
     env.DB.prepare("UPDATE checks SET review_status=?,review_note=?,reviewed_by=?,reviewed_at=? WHERE id=?").bind(status, note, user.id, iso(), row.id),
     env.DB.prepare("UPDATE material_records SET status=? WHERE student_id=? AND material_id=?").bind(status === "已通过" ? "已通过" : "未交", row.student_id, row.material_id),
-    env.DB.prepare("INSERT INTO notifications(student_id,kind,title,content) VALUES(?,'lesson',?,?)").bind(row.student_id, "材料审阅结果：" + row.material_name, status === "已通过" ? "你提交的「" + row.material_name + "」已通过审阅。" : "你提交的「" + row.material_name + "」需修改：" + note)
+    env.DB.prepare("INSERT INTO notifications(student_id,kind,title,content) VALUES(?,'lesson',?,?)").bind(row.student_id, "材料审阅结果：" + row.material_name, status === "已通过" ? "你提交的「" + row.material_name + "」已通过审阅。" : "你提交的「" + row.material_name + "」需修改：" + note),
+    ...(status === "已通过" && !row.monitor_approved ? [env.DB.prepare("UPDATE checks SET monitor_approved=1,monitor_approved_at=? WHERE id=?").bind(iso(), row.id)] : [])
   ]), ...(finish ? [finish] : [])]);
   return json({ ok: true, count: updates.length });
 }

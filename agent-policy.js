@@ -1,14 +1,12 @@
+import { OFFICE_ACTIONS } from "./office-agent.js";
+import { STUDENT_ACTIONS } from "./mentor-actions.js";
+
 // PDP: a small, deterministic policy for the agent-facing capabilities.
 // Resource ownership and department/grade scope are checked again where records are loaded.
 const roles = new Set(["guest", "student", "counselor", "admin"]);
 const staff = new Set(["counselor", "admin"]);
-const studentActions = new Set(["navigate", "read_summary", "fill_field", "prepare_submit", "prepare_upload"]);
-const officeActions = new Set([
-  "register_students", "update_students", "upload_forms", "upload_student_files", "reset_password",
-  "delete_students", "send_notifications", "advance_students", "review_materials",
-  "list_students", "list_submissions", "register_counselors", "delete_counselors",
-  "create_invites", "create_department", "create_grade", "create_major", "create_class", "set_monitor"
-]);
+const studentActions = STUDENT_ACTIONS;
+const officeActions = OFFICE_ACTIONS;
 const adminOnly = new Set(["register_counselors", "delete_counselors", "create_invites", "create_department", "create_grade", "create_major"]);
 
 const allow = () => ({ allowed: true, reason: "allowed" });

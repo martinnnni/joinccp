@@ -80,11 +80,11 @@ const renderMarkdown = src => {
   if (inCode) out += "<pre><code>" + esc(codeBuf.join("\n")) + "</code></pre>";
   return out;
 };
-const h = text => make("h1", { className: "page-title", text });
+const h = (text, cls = "page-title") => make("h1", { className: cls, text });
 const p = text => make("p", { text });
 const panel = (...children) => make("section", { className: "panel" }, children);
-const pageHead = (code, title, description = "") => make("div", { className: "page-head" },
-  make("div", {}, h(title), description ? p(description) : null));
+const pageHead = (code, title, description = "", greeting = "", titleClass = "") => make("div", { className: "page-head" },
+  make("div", {}, h(title, titleClass), greeting ? make("p", { className: "greeting-line", text: greeting }) : null, description ? p(description) : null));
 const dayPart = () => {
   const h = new Date().getHours();
   return h >= 5 && h < 9 ? "早晨" : h >= 9 && h < 12 ? "上午" : h >= 12 && h < 14 ? "中午" : h >= 14 && h < 18 ? "下午" : "晚上";
@@ -393,7 +393,7 @@ function recordsPage(page) {
   const description = recycle ? "恢复已移除的账号及其档案。" : "查询访问、提交及后台操作，时间使用北京时间。";
   const body = make("div");
   const rows = make("tbody");
-  const columns = recycle ? ["账号", "角色", "班级", "移除时间", "操作"] : ["时间", "操作者", "操作", "HTTP 状态", "对象编号"];
+  const columns = recycle ? ["账号", "角色", "班级", "移除时间", "操作"] : ["时间", "操作者", "操作", "HTTP 状态", "策略决策", "对象编号"];
   const table = tableWrap(make("table", { className: "data" }, make("thead", {}, make("tr", {}, columns.map(text => make("th", { text })))), rows));
   let cursor = "";
   const more = button("加载更多", load, "secondary");
@@ -424,7 +424,7 @@ function recordsPage(page) {
             dialog_confirm: "确认操作", dialog_cancel: "取消操作", download_official_form: "下载公开表格",
             daily_reminders: "执行定时提醒"
           })[item.action] || item.method + " " + item.action,
-          String(item.status), item.targets || "—"
+          String(item.status), item.policy_decision ? (item.policy_decision === "allow" ? "允许" : "拒绝") + (item.policy_reason && item.policy_reason !== "allowed" ? " · " + item.policy_reason : "") : "—", item.targets || "—"
         ];
         rows.append(make("tr", {}, cells.map(value => make("td", {}, value))));
       }
@@ -441,7 +441,7 @@ function recordsPage(page) {
 }
 
 function profilePage() {
-  const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", "我的档案", "同学，" + dayPart() + "好。查看当前培养阶段、下一步节点和材料完成情况。"), notice("正在读取档案…"));
+  const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", "我的档案", "查看当前培养阶段、下一步节点和材料完成情况。", "同学，" + dayPart() + "好"), notice("正在读取档案…"));
   (async () => { try {
     const data = await api("/api/profile");
     const profile = data.profile;
@@ -484,7 +484,7 @@ function profilePage() {
     const materials = panel(make("div", { className: "panel-head" },
       make("h2", { text: "本阶段材料" }), make("span", { className: "small", text: "共 " + total + " 项" })),
       total ? tableWrap(table) : make("div", { className: "empty-state" }, make("strong", { text: "暂无材料" }), "此阶段尚未配置材料清单。"));
-    shell.replaceChildren(pageHead("STUDENT / OVERVIEW", "我的档案", "同学，" + dayPart() + "好。查看当前培养阶段、下一步节点和材料完成情况。"),
+    shell.replaceChildren(pageHead("STUDENT / OVERVIEW", "我的档案", "查看当前培养阶段、下一步节点和材料完成情况。", "同学，" + dayPart() + "好"),
       summary, stats,
       ...(data.next ? [notice("下一步：" + data.next.name + "。请按计划准备相关材料。")] : []),
       materials);
@@ -1347,7 +1347,7 @@ function checksPage(monitor = false) {
   const rows = make("tbody");
   const selected = new Set();
   const count = make("span", { className: "bulk-count", text: "已选 0 份" });
-  const canReview = x => x.review_status === "待审阅" && (monitor ? !x.monitor_approved : !!x.monitor_approved);
+  const canReview = x => x.review_status === "待审阅" && (monitor ? !x.monitor_approved : true);
   const note = field("退回修改说明", "reviewNote", "text", false);
   const noteInput = note.querySelector("input");
   const selectAll = make("input", { type: "checkbox", "aria-label": "选择本页待审阅材料", onchange: event => {
@@ -1533,9 +1533,9 @@ function hierarchyPage() {
 }
 
 function adminPage() {
-  const adminTitle = "老师，" + dayPart() + "好";
+  const adminTitle = "老师，" + dayPart() + "好，您辛苦了！";
   const adminCode = me.role === "admin" ? "ADMIN / CONSOLE" : "COUNSELOR / CONSOLE";
-  const shell = make("div", { className: "view view-admin" }, pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"), notice("正在读取数据…"));
+  const shell = make("div", { className: "view view-admin" }, pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。", "", "page-title greeting"), notice("正在读取数据…"));
   (async () => { try {
     const filters = new URLSearchParams(location.search);
     const data = await api("/api/admin/dashboard?" + filters);
@@ -1713,7 +1713,7 @@ function adminPage() {
       } catch (error) { feedback(notifyForm, error.message); }
       finally { release(); }
     });
-    shell.replaceChildren(pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"),
+    shell.replaceChildren(pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。", "", "page-title greeting"),
       metrics,
       panel(make("div", { className: "panel-head" }, make("h2", { text: "发送站内通知" }), make("span", { className: "small", text: "手动向学生发送站内信。" })), notifyForm),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "检索学生" })), searchForm),
@@ -1755,7 +1755,7 @@ function adminPage() {
         }, "secondary") : null,
         data.students.length ? bulkTools : null,
         data.students.length ? tableWrap(students) : make("div", { className: "empty-state" }, make("strong", { text: "尚无学生" }), "打开办公助理上传入围名单，或在上方手动添加。")));
-  } catch (error) { shell.replaceChildren(pageHead(adminCode, adminTitle), notice(error.message, "error")); } })();
+  } catch (error) { shell.replaceChildren(pageHead(adminCode, adminTitle, "", "", "page-title greeting"), notice(error.message, "error")); } })();
   return shell;
 }
 function showStudent(student, data) {

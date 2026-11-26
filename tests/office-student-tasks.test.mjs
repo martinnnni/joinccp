@@ -93,6 +93,21 @@ test("站内信预览确定收件人，确认只发送一次，执行前复核�
   assert.deepEqual(db.prepare("SELECT student_id FROM notifications ORDER BY id").all().map(row => row.student_id), [11, 12]);
 });
 
+test("办公 JIT 授权绑定操作者、操作内容和到期计划", async t => {
+  const { db, plan, call } = setup(t);
+  const grant = (await plan({ type: "send_notifications", students: [{ student: "100011" }], title: "提醒", content: "请查看材料。" })).plan;
+  assert.match(grant.jitToken, /^[a-f0-9]{64}$/);
+  await assert.rejects(call("execute", { planId: grant.id }), { status: 403 });
+  await assert.rejects(call("execute", { planId: grant.id, jitToken: "0".repeat(64) }), { status: 403 });
+  const original = db.prepare("SELECT payload_json FROM office_plans WHERE id=?").get(grant.id).payload_json;
+  db.prepare("UPDATE office_plans SET payload_json=? WHERE id=?").run(JSON.stringify({ ...JSON.parse(original), content: "已被改写" }), grant.id);
+  await assert.rejects(call("execute", { planId: grant.id, jitToken: grant.jitToken }), { status: 403 });
+  assert.equal(db.prepare("SELECT count(*) AS n FROM notifications").get().n, 0);
+  db.prepare("UPDATE office_plans SET payload_json=? WHERE id=?").run(original, grant.id);
+  assert.equal((await (await call("execute", { planId: grant.id, jitToken: grant.jitToken })).json()).count, 1);
+  await assert.rejects(call("execute", { planId: grant.id, jitToken: grant.jitToken }), { status: 409 });
+});
+
 test("回收站保留材料，跨院系名单整批拒绝", async t => {
   const { db, deleted, plan, execute } = setup(t);
   db.exec("INSERT INTO checks(student_id,material_id,r2_key,filename) SELECT 11,id,'checks/test/a.docx','a.docx' FROM materials LIMIT 1");
