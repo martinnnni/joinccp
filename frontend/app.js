@@ -84,7 +84,7 @@ const h = (text, cls = "page-title") => make("h1", { className: cls, text });
 const p = text => make("p", { text });
 const panel = (...children) => make("section", { className: "panel" }, children);
 const pageHead = (code, title, description = "", greeting = "", titleClass = "") => make("div", { className: "page-head" },
-  make("div", {}, h(title, titleClass), greeting ? make("p", { className: "greeting-line", text: greeting }) : null, description ? p(description) : null));
+  make("div", {}, typeof title === "string" ? h(title, titleClass) : title, greeting ? make("p", { className: "greeting-line", text: greeting }) : null, description ? p(description) : null));
 const dayPart = () => {
   const h = new Date().getHours();
   return h >= 5 && h < 9 ? "早晨" : h >= 9 && h < 12 ? "上午" : h >= 12 && h < 14 ? "中午" : h >= 14 && h < 18 ? "下午" : "晚上";
@@ -1533,9 +1533,11 @@ function hierarchyPage() {
 }
 
 function adminPage() {
-  const adminTitle = "老师，" + dayPart() + "好，您辛苦了！";
+  const adminTitle = make("h1", { className: "page-title" },
+    make("span", { text: me.role === "admin" ? "管理员工作台" : "辅导员工作台" }),
+    make("span", { className: "greeting-title", text: " | 老师" + dayPart() + "好，您辛苦了！" }));
   const adminCode = me.role === "admin" ? "ADMIN / CONSOLE" : "COUNSELOR / CONSOLE";
-  const shell = make("div", { className: "view view-admin" }, pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。", "", "page-title greeting"), notice("正在读取数据…"));
+  const shell = make("div", { className: "view view-admin" }, pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"), notice("正在读取数据…"));
   (async () => { try {
     const filters = new URLSearchParams(location.search);
     const data = await api("/api/admin/dashboard?" + filters);
@@ -1713,7 +1715,7 @@ function adminPage() {
       } catch (error) { feedback(notifyForm, error.message); }
       finally { release(); }
     });
-    shell.replaceChildren(pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。", "", "page-title greeting"),
+    shell.replaceChildren(pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"),
       metrics,
       panel(make("div", { className: "panel-head" }, make("h2", { text: "发送站内通知" }), make("span", { className: "small", text: "手动向学生发送站内信。" })), notifyForm),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "检索学生" })), searchForm),
@@ -1755,7 +1757,7 @@ function adminPage() {
         }, "secondary") : null,
         data.students.length ? bulkTools : null,
         data.students.length ? tableWrap(students) : make("div", { className: "empty-state" }, make("strong", { text: "尚无学生" }), "打开办公助理上传入围名单，或在上方手动添加。")));
-  } catch (error) { shell.replaceChildren(pageHead(adminCode, adminTitle, "", "", "page-title greeting"), notice(error.message, "error")); } })();
+  } catch (error) { shell.replaceChildren(pageHead(adminCode, adminTitle), notice(error.message, "error")); } })();
   return shell;
 }
 function showStudent(student, data) {
