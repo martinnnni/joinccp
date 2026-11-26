@@ -510,47 +510,6 @@ function mentorGirl() {
   return make("img", { src: "/girl/frame_0.webp", alt: "", className: "mentor-girl-img", draggable: "false" });
 }
 
-// 通用拖拽：按住 handle 可拖动 target，在视口内自由移动；返回 moved 状态供点击/拖拽区分。
-function makeDraggable(handle, target) {
-  const state = { moved: false, dragging: false, startX: 0, startY: 0, originLeft: 0, originTop: 0 };
-  const onMove = event => {
-    if (!state.dragging) return;
-    const dx = event.clientX - state.startX, dy = event.clientY - state.startY;
-    if (!state.moved && Math.hypot(dx, dy) < 4) return;
-    state.moved = true;
-    target.style.left = Math.max(120 - target.offsetWidth, Math.min(state.originLeft + dx, window.innerWidth - 120)) + "px";
-    target.style.top = Math.max(8, Math.min(state.originTop + dy, window.innerHeight - 56)) + "px";
-  };
-  const onUp = () => {
-    if (!state.dragging) return;
-    state.dragging = false;
-    handle.classList.remove("mentor-panel-dragging");
-    document.removeEventListener("pointermove", onMove);
-    document.removeEventListener("pointerup", onUp);
-    document.removeEventListener("pointercancel", onUp);
-  };
-  handle.addEventListener("pointerdown", event => {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    const rect = target.getBoundingClientRect();
-    if (rect.width >= window.innerWidth - 1 && rect.height >= window.innerHeight - 1) return; // 全屏不拖拽
-    state.dragging = true;
-    state.moved = false;
-    state.startX = event.clientX;
-    state.startY = event.clientY;
-    state.originLeft = rect.left;
-    state.originTop = rect.top;
-    target.style.left = rect.left + "px";
-    target.style.top = rect.top + "px";
-    target.style.right = "auto";
-    target.style.bottom = "auto";
-    handle.classList.add("mentor-panel-dragging");
-    document.addEventListener("pointermove", onMove);
-    document.addEventListener("pointerup", onUp);
-    document.addEventListener("pointercancel", onUp);
-  });
-  return state;
-}
-
 function rosterEditor(initial, alive, onDone) {
   const draft = make("div", { className: "office-roster" });
   const rosterForm = make("form", { className: "office-roster-form" });
@@ -775,9 +734,6 @@ function mentorPage() {
       make("div", { className: "mentor-titlebox" },
         make("strong", { text: mentorTitle() }),
         make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })));
-    // 悬浮窗拖拽：按住顶部小女孩 + 标题框拖动整个面板，在视口内自由移动
-    const panelEl = document.getElementById("mentorPanel");
-    if (panelEl) makeDraggable(hero, panelEl);
     const header = make("header", { className: "mentor-topbar" }, make("div", { className: "mentor-topbar-left" }, menu, newChat()));
     if (staffAgent) {
       fileInput.multiple = true;
@@ -1786,10 +1742,7 @@ async function init() {
     await refreshUnreadNotifications();
     render();
     const fab = document.getElementById("mentorFab");
-    if (fab) {
-      const fabDrag = makeDraggable(fab, fab);
-      fab.addEventListener("click", () => { if (fabDrag.moved) { fabDrag.moved = false; return; } mentorPanelOpen ? closeMentor() : openMentor(); });
-    }
+    if (fab) fab.addEventListener("click", () => mentorPanelOpen ? closeMentor() : openMentor());
     const close = document.getElementById("mentorPanelClose");
     if (close) close.addEventListener("click", closeMentor);
     document.addEventListener("keydown", event => { if (event.key === "Escape" && mentorPanelOpen) closeMentor(); });
