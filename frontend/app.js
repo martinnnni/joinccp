@@ -6,6 +6,7 @@ import { deriveVerifier } from "./pbkdf2.js";
 import { fileExtension, materialAccept, maxBatchBytes, maxFileBytes, normalizedAttachment, officeAccept, uploadType } from "../upload-types.js";
 import { decodeImage, processImage, rotateScan, validCrop } from "./scan.js";
 import { expandZip } from "./zip.js";
+import { updateWatermark, watermarkInspector } from "./watermark.js";
 
 const root = document.getElementById("app");
 const navigation = document.getElementById("navigation");
@@ -241,13 +242,15 @@ function nav() {
       make("div", { className: "nav-profile-menu" },
         make("div", { className: "nav-profile-name", text: me.name || me.username }),
         make("a", { href: "#operations", text: "操作记录" }),
+        me.role === "admin" ? make("a", { href: "#watermark", text: "水印溯源" }) : null,
         make("a", { href: "#password", text: "修改密码" }),
         button("退出", logout, "linklike")));
     navigation.append(profileMenu);
   }
 }
 async function refreshMe() {
-  try { me = (await api("/api/me")).user; } catch { me = null; }
+  try { const data = await api("/api/me"); me = data.user; updateWatermark(data.watermark); }
+  catch { me = null; updateWatermark(null); }
 }
 let unreadNotifications = 0;
 async function refreshUnreadNotifications() {
@@ -286,6 +289,7 @@ function notificationPopup(unread) {
   dialog.showModal();
 }
 function render() {
+  if (!me) updateWatermark(null);
   const prevPage = document.body.dataset.page;
   const scrollY = window.scrollY;
   document.body.dataset.surface = me ? "workspace" : "entry";
@@ -307,6 +311,7 @@ function render() {
   else if (me.must_change_password) root.replaceChildren(passwordPage());
   else if (page === "password") root.replaceChildren(passwordPage());
   else if (page === "forms") root.replaceChildren(formsPage());
+  else if (page === "watermark" && me.role === "admin") root.replaceChildren(watermarkInspector({ make, post }));
   else if (page === "checks" && me.role === "student" && me.is_monitor) root.replaceChildren(checksPage(true));
   else if (me.role === "student") root.replaceChildren(
     page === "check" ? checkPage() : page === "mentor" ? mentorPage() : page === "notifications" ? notificationsPage() : page === "operations" ? recordsPage("operations") : profilePage());

@@ -109,6 +109,20 @@
 
 /* ---------- 基础 ---------- */
 * { box-sizing: border-box; }
+.identity-watermark {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  z-index: 2147483647;
+  pointer-events: none;
+  user-select: none;
+}
+dialog > .identity-watermark { position: fixed; }
+.watermark-preview { display: block; width: 100%; height: auto; border: 1px solid var(--line); margin-bottom: 20px; }
+.watermark-preview[hidden] { display: none; }
+@media print { .identity-watermark { position: fixed; print-color-adjust: exact; } }
 html { scroll-behavior: smooth; }
 body {
   margin: 0;

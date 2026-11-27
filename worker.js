@@ -1,4 +1,5 @@
 import { matchesUploadType, maxBatchBytes, maxFileBytes, uploadType } from "./upload-types.js";
+import { watermarkIdentity, watermarkUserId } from "./watermark.js";
 import { retrieve, publicSources, modelMessages, advisoryMessages, reviewStandards, knowledgeCount } from "./rag.js";
 import { mentorConfig } from "./mentor-config.js";
 import { classifyIntent, decideMentorRoute, chitchatMessages, isIdentityQuestion } from "./mentor-routing.js";
@@ -230,7 +231,7 @@ async function changePassword(request, env, user) {
 }
 
 async function studentRoutes(request, env, path, user) {
-  if (path === "/api/me" && request.method === "GET") return json({ ok: true, user });
+  if (path === "/api/me" && request.method === "GET") return json({ ok: true, user, watermark: await watermarkIdentity(user, env.AUTH_PEPPER) });
   if (path === "/api/profile" && request.method === "GET") {
     assert(user.role === "student", "仅学生可查看个人档案", 403);
     const stage = await env.DB.prepare("SELECT * FROM stages WHERE slug=?").bind(user.current_stage_slug).first();
@@ -707,6 +708,18 @@ async function archiveUsers(env, user, ids, role, finish) {
 }
 
 async function managementRecords(request, env, path, user) {
+  if (path === "/api/admin/watermark/lookup" && request.method === "POST") {
+    assert(user.role === "admin", "仅管理员可核验水印", 403);
+    const data = await bodyJson(request);
+    const code = clean(data.code, 64).toUpperCase();
+    const userId = watermarkUserId(code);
+    assert(userId, "水印编号格式无效");
+    const target = await env.DB.prepare("SELECT u.id,u.username,COALESCE(NULLIF(u.name,''),p.name) AS name,p.major,m.name AS major_name FROM users u LEFT JOIN profiles p ON p.user_id=u.id LEFT JOIN classes cl ON cl.id=u.class_id LEFT JOIN majors m ON m.id=COALESCE(u.major_id,cl.major_id) WHERE u.id=?").bind(userId).first();
+    assert(target, "编号无效或账号已不存在", 404);
+    const identity = await watermarkIdentity(target, env.AUTH_PEPPER);
+    assert(equal(identity.code, code), "水印签名无效", 400);
+    return json({ ok: true, identity, username: target.username });
+  }
   if (!["/api/admin/operation-logs", "/api/admin/recycle", "/api/admin/recycle/restore"].includes(path)) return null;
   if (path === "/api/admin/operation-logs" && request.method === "GET") {
     const before = new URL(request.url).searchParams.get("before");
