@@ -459,7 +459,15 @@ function recordsPage(page) {
 
 function profilePage() {
   const profileTitle = () => make("h1", { className: "page-title" }, make("span", { text: "我的发展档案" }));
-  const profileGreeting = extra => greetingClock(dayPart() + "好！", extra);
+  const profileGreeting = extra => {
+    const greeting = greetingClock(dayPart() + "好！");
+    const row = greeting.querySelector(".greeting-row");
+    const box = extra || make("div", { className: "deadline-box" });
+    const details = make("div", { className: "deadline-details" }, ...box.childNodes);
+    box.replaceChildren(details, row);
+    greeting.append(box);
+    return greeting;
+  };
   const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", profileTitle(), "在这里统一查看当前培养阶段、下一步节点和材料完成情况。", profileGreeting()), skeleton());
   (async () => { try {
     const data = await api("/api/profile");
