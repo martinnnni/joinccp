@@ -485,7 +485,7 @@ body[data-page=bootstrap] .auth-form > .field:last-of-type { grid-column: 1/-1; 
 .view-profile > .page-head .deadline-text { font-size: 16px; }
 @media (max-width: 767px) {
   .view-profile > .page-head { grid-template-columns: minmax(0, 1fr); gap: 20px; }
-  .view-profile > .page-head .page-head-greeting { display: flex; }
+  .view-profile > .page-head .page-head-greeting { display: none; }
   .view-profile > .page-head .page-title { font-size: clamp(30px, 8.5vw, 40px); }
   .view-profile > .page-head > div > p { font-size: 15px; }
   .view-profile > .page-head .deadline-box { padding: 14px 16px; gap: 12px; }
