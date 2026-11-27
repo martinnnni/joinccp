@@ -92,7 +92,8 @@ const dayPart = () => {
 const greetingClock = (greetText, extra = null) => {
   const clock = make("span", { className: "greeting-clock" });
   const el = make("div", { className: "page-head-greeting" },
-    make("span", { className: "greeting-title", text: greetText }), clock, ...(extra ? [extra] : []));
+    make("div", { className: "greeting-row" }, make("span", { className: "greeting-title", text: greetText }), clock),
+    ...(extra ? [extra] : []));
   const tick = () => { clock.textContent = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date()); };
   tick();
   const timer = setInterval(() => { if (el.isConnected) tick(); else clearInterval(timer); }, 1000);
@@ -517,22 +518,19 @@ function profilePage() {
         make("td", { text: item.name }),
         make("td", { text: ({ A: "档案材料", B: "流程表", C: "会议记录" })[item.category] || item.category }),
         make("td", { text: ({ red: "个人填写", blue: "组织审批", black: "支部填写" })[item.fill_method] || item.fill_method }),
-        make("td", {}, make("span", { className: "badge " + (materialState(item) === "已通过" ? "done" : "missing"), text: materialState(item) }),
+        make("td", { className: "status-cell" },
+          make("div", { className: "status-head" }, make("span", { className: "badge " + (materialState(item) === "已通过" ? "done" : "missing"), text: materialState(item) })),
           item.checked_at ? make("div", { className: "small", text: "已提交 · " + displayTime(item.checked_at) }) : null,
           item.reviewed_at ? make("div", { className: "small", text: "已审阅 · " + displayTime(item.reviewed_at) }) : null,
           item.review_note ? make("div", { className: "small", text: "审阅说明：" + item.review_note }) : null,
-          item.checked_at ? make("details", { className: "submission-timeline" }, make("summary", { text: "提交历史" }),
-            make("ol", {}, (data.submissionHistory || []).filter(entry => entry.material_id === item.id).map(entry => make("li", {},
-              make("div", { className: "small", text: displayTime(entry.checked_at) + " · " + (entry.reviewed_at ? entry.review_status : "已提交") }),
-              entry.monitor_approved_at ? make("div", { className: "small", text: displayTime(entry.monitor_approved_at) + " · 学生管理员初审通过" }) : null,
-              entry.review_note ? make("div", { className: "small", text: entry.review_note }) : null,
-              make("a", { className: "text-link small", href: "/api/checks/" + entry.id + "/file", text: "下载该版本" }))))) : null,
-          materialState(item) === "退回修改" ? make("a", { href: "#check", className: "text-link small", text: "修改后重新提交" }) : null,
-          item.review_status === "待审阅" && !item.viewed_at && item.check_id ? make("button", { type: "button", className: "text-link small", text: "撤销重发", onclick: async event => {
-            const btn = event.currentTarget; btn.disabled = true; btn.textContent = "撤销中…";
-            try { await post("/api/checks/" + item.check_id + "/withdraw", {}); render(); }
-            catch (error) { btn.disabled = false; btn.textContent = "撤销重发"; alert(error.message); }
-          } }) : null)))));
+          make("div", { className: "status-actions" },
+            materialState(item) === "退回修改" ? make("a", { href: "#check", className: "btn secondary", text: "重新提交" }) : null,
+            item.review_status === "待审阅" && !item.viewed_at && item.check_id ? make("button", { type: "button", className: "btn secondary", text: "撤销重发", onclick: async event => {
+              const btn = event.currentTarget; btn.disabled = true; btn.textContent = "撤销中…";
+              try { await post("/api/checks/" + item.check_id + "/withdraw", {}); render(); }
+              catch (error) { btn.disabled = false; btn.textContent = "撤销重发"; alert(error.message); }
+            } }) : null,
+            item.checked_at && item.check_id ? make("a", { className: "text-link small", href: "/api/checks/" + item.check_id + "/file", text: "下载" }) : null))))));
     const materials = panel(make("div", { className: "panel-head" },
       make("h2", { text: "本阶段材料" }), make("span", { className: "small", text: "共 " + total + " 项" })),
       total ? tableWrap(table) : make("div", { className: "empty-state" }, make("strong", { text: "暂无材料" }), "此阶段尚未配置材料清单。"));

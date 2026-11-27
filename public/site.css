@@ -96,9 +96,13 @@
 .check-subpanel .results-list, .check-subpanel .data-wrap { margin-bottom: 0; }
 .check-subpanel .empty-state { text-align: center; }
 .deadline-text { margin: 0; color: var(--accent-deep); font-weight: 600; font-size: 16px; line-height: 1.5; }
-.deadline-box { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; margin-top: 6px; text-align: right; max-width: 380px; }
-.deadline-box .deadline-label { font: 600 11px/1 var(--mono); color: var(--accent); letter-spacing: .08em; }
+.deadline-box { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-top: 4px; text-align: right; max-width: 420px; }
+.deadline-box .deadline-label { flex: none; font: 600 11px/1 var(--mono); color: var(--accent); letter-spacing: .08em; }
 .deadline-box .deadline-text { font-size: 14px; line-height: 1.45; white-space: normal; }
+.status-cell .status-head { margin-bottom: 4px; }
+.status-cell .status-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.status-cell .status-actions .btn.secondary { min-height: 30px; padding: 4px 12px; font-size: 13px; }
+.status-cell .status-actions .text-link { line-height: 30px; }
 
 /* ---------- 基础 ---------- */
 * { box-sizing: border-box; }
@@ -427,10 +431,15 @@ body[data-page=bootstrap] .auth-form > .field:last-of-type { grid-column: 1/-1; 
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 2px;
+  gap: 6px;
   text-align: right;
   white-space: nowrap;
   padding-bottom: 4px;
+}
+.greeting-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
 .page-head-greeting .greeting-title {
   font-family: 'STXingkai', 'Xingkai SC', 'KaiTi', 'STKaiti', '华文行楷', '楷体', serif;
