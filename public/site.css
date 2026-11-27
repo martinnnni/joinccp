@@ -94,6 +94,7 @@
   padding: var(--s-4);
 }
 .check-subpanel .results-list, .check-subpanel .data-wrap { margin-bottom: 0; }
+.check-subpanel .empty-state { text-align: center; }
 .deadline-text { margin: 0; color: var(--accent-deep); font-weight: 600; font-size: 16px; line-height: 1.5; }
 
 /* ---------- 基础 ---------- */
