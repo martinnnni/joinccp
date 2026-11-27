@@ -96,6 +96,9 @@
 .check-subpanel .results-list, .check-subpanel .data-wrap { margin-bottom: 0; }
 .check-subpanel .empty-state { text-align: center; }
 .deadline-text { margin: 0; color: var(--accent-deep); font-weight: 600; font-size: 16px; line-height: 1.5; }
+.deadline-box { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; margin-top: 6px; text-align: right; max-width: 380px; }
+.deadline-box .deadline-label { font: 600 11px/1 var(--mono); color: var(--accent); letter-spacing: .08em; }
+.deadline-box .deadline-text { font-size: 14px; line-height: 1.45; white-space: normal; }
 
 /* ---------- 基础 ---------- */
 * { box-sizing: border-box; }

@@ -89,10 +89,10 @@ const dayPart = () => {
   const h = new Date().getHours();
   return h >= 5 && h < 9 ? "早晨" : h >= 9 && h < 12 ? "上午" : h >= 12 && h < 14 ? "中午" : h >= 14 && h < 18 ? "下午" : "晚上";
 };
-const greetingClock = greetText => {
+const greetingClock = (greetText, extra = null) => {
   const clock = make("span", { className: "greeting-clock" });
   const el = make("div", { className: "page-head-greeting" },
-    make("span", { className: "greeting-title", text: greetText }), clock);
+    make("span", { className: "greeting-title", text: greetText }), clock, ...(extra ? [extra] : []));
   const tick = () => { clock.textContent = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date()); };
   tick();
   const timer = setInterval(() => { if (el.isConnected) tick(); else clearInterval(timer); }, 1000);
@@ -458,7 +458,7 @@ function recordsPage(page) {
 
 function profilePage() {
   const profileTitle = () => make("h1", { className: "page-title" }, make("span", { text: "我的档案" }));
-  const profileGreeting = () => greetingClock(dayPart() + "好！");
+  const profileGreeting = extra => greetingClock(dayPart() + "好！", extra);
   const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", profileTitle(), "查看当前培养阶段、下一步节点和材料完成情况。", profileGreeting()), skeleton());
   (async () => { try {
     const data = await api("/api/profile");
@@ -480,10 +480,10 @@ function profilePage() {
       make("div", { className: "progress-track" }, make("span", { style: "width:" + (stageNumber / 5 * 100) + "%" })),
       make("p", { className: "small", text: "培养流程 · 第 " + stageNumber + " / 5 阶段" }));
     let deadlineTimer = null;
-    const deadlineText = make("p", { className: "deadline-text", text: "正在计算…" });
-    const deadlineCard = panel(
-      make("div", { className: "panel-head" }, make("h2", { text: "即将截止" }), make("span", { className: "badge", text: "倒计时" })),
-      deadlineText);
+    const deadlineEl = make("div", { className: "deadline-box" },
+      make("span", { className: "deadline-label", text: "即将截止" }),
+      make("p", { className: "deadline-text", text: "正在计算…" }));
+    const deadlineText = deadlineEl.querySelector(".deadline-text");
     {
       const parseDeadline = raw => {
         const s = String(raw || "");
@@ -499,7 +499,7 @@ function profilePage() {
           const diff = next.dl - new Date();
           if (diff <= 0) { deadlineText.textContent = "「" + next.name + "」已到截止时间，请尽快提交。"; clearInterval(deadlineTimer); return; }
           const d = Math.floor(diff / 86400000), h = Math.floor(diff % 86400000 / 3600000), m = Math.floor(diff % 3600000 / 60000), s = Math.floor(diff % 60000 / 1000);
-          deadlineText.textContent = "下一份需要提交的文件：" + next.name + "，距离截止还有 " + d + " 天 " + h + " 小时 " + m + " 分 " + s + " 秒";
+          deadlineText.textContent = "下一份需要提交的文件：" + next.name + " · 剩余 " + d + " 天 " + h + " 小时 " + m + " 分 " + s + " 秒";
         };
         tick();
         deadlineTimer = setInterval(tick, 1000);
@@ -536,8 +536,8 @@ function profilePage() {
     const materials = panel(make("div", { className: "panel-head" },
       make("h2", { text: "本阶段材料" }), make("span", { className: "small", text: "共 " + total + " 项" })),
       total ? tableWrap(table) : make("div", { className: "empty-state" }, make("strong", { text: "暂无材料" }), "此阶段尚未配置材料清单。"));
-    shell.replaceChildren(pageHead("STUDENT / OVERVIEW", profileTitle(), "查看当前培养阶段、下一步节点和材料完成情况。", profileGreeting()),
-      deadlineCard, summary, stats,
+    shell.replaceChildren(pageHead("STUDENT / OVERVIEW", profileTitle(), "查看当前培养阶段、下一步节点和材料完成情况。", profileGreeting(deadlineEl)),
+      summary, stats,
       ...(data.next ? [notice("下一步：" + data.next.name + "。请按计划准备相关材料。")] : []),
       materials);
   } catch (error) { shell.replaceChildren(pageHead("STUDENT / OVERVIEW", "我的档案"), notice(error.message, "error")); } })();
