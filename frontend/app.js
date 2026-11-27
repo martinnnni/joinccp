@@ -458,9 +458,9 @@ function recordsPage(page) {
 }
 
 function profilePage() {
-  const profileTitle = () => make("h1", { className: "page-title" }, make("span", { text: "我的档案" }));
+  const profileTitle = () => make("h1", { className: "page-title" }, make("span", { text: "我的发展档案" }));
   const profileGreeting = extra => greetingClock(dayPart() + "好！", extra);
-  const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", profileTitle(), "查看当前培养阶段、下一步节点和材料完成情况。", profileGreeting()), skeleton());
+  const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", profileTitle(), "在这里统一查看当前培养阶段、下一步节点和材料完成情况。", profileGreeting()), skeleton());
   (async () => { try {
     const data = await api("/api/profile");
     const profile = data.profile;
@@ -539,7 +539,7 @@ function profilePage() {
     const materials = panel(make("div", { className: "panel-head" },
       make("h2", { text: "本阶段材料" }), make("span", { className: "small", text: "共 " + total + " 项" })),
       total ? tableWrap(table) : make("div", { className: "empty-state" }, make("strong", { text: "暂无材料" }), "此阶段尚未配置材料清单。"));
-    shell.replaceChildren(pageHead("STUDENT / OVERVIEW", profileTitle(), "查看当前培养阶段、下一步节点和材料完成情况。", profileGreeting(deadlineEl)),
+    shell.replaceChildren(pageHead("STUDENT / OVERVIEW", profileTitle(), "在这里统一查看当前培养阶段、下一步节点和材料完成情况。", profileGreeting(deadlineEl)),
       summary, stats,
       ...(data.next ? [notice("下一步：" + data.next.name + "。请按计划准备相关材料。")] : []),
       materials);
