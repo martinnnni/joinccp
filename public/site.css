@@ -83,6 +83,12 @@
 .skeleton-card { height: 84px; }
 .skeleton-block { height: 220px; margin-bottom: var(--s-5); }
 
+/* 材料提交：合并框内的分节标题与分阶段展示 */
+.check-section-title { margin: var(--s-4) 0 var(--s-3); font-size: 15px; font-weight: 600; color: var(--ink); }
+.check-section-title:first-of-type { margin-top: 0; }
+.check-stage { margin: var(--s-4) 0 var(--s-2); font-size: 14px; font-weight: 600; color: var(--accent-deep); }
+.check-output, .check-submissions { min-height: 0; }
+
 /* ---------- 基础 ---------- */
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }

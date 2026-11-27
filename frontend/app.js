@@ -459,7 +459,8 @@ function profilePage() {
     const stageNumber = Math.max(1, stageOrder.indexOf(profile.current_stage_slug) + 1);
     const materialState = x => x.review_status === "退回修改" ? "退回修改" :
       x.review_status === "已通过" || x.status === "已通过" ? "已通过" :
-      x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待学生管理员初审" : x.status || "未提交";
+      x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待学生管理员初审" :
+      x.status === "已交" ? "已提交" : "未提交";
     const done = data.materials.filter(x => materialState(x) === "已通过").length;
     const total = data.materials.length;
     const completion = total ? Math.round(done * 100 / total) : 0;
@@ -1259,30 +1260,50 @@ function checkPage() {
     }
     scanInput.addEventListener("change", chooseScan);
     gallery.addEventListener("change", chooseScan);
-    const output = panel(make("div", { className: "panel-head" }, make("h2", { text: "质检结果" })),
-      make("div", { className: "empty-state" }, make("strong", { text: "等待检查" }), "选择文件后，提交结果将在这里显示。"));
-    const submittedRows = make("tbody");
-    const submittedPanel = panel(
-      make("div", { className: "panel-head" }, make("h2", { text: "我的已提交文件" }), make("span", { className: "small", text: "待审阅且辅导员尚未查看时可撤销重发" })),
-      tableWrap(make("table", { className: "data" }, make("thead", {}, make("tr", {}, ["材料", "文件", "提交时间", "状态", "操作"].map(x => make("th", { text: x })))), submittedRows)));
+    const outputBody = make("div", { className: "check-output" },
+      make("div", { className: "empty-state" }, make("strong", { text: "等待检查" }), "选择文件后，质检结果将在这里显示。"));
+    const submissionsBody = make("div", { className: "check-submissions" },
+      make("div", { className: "empty-state" }, make("strong", { text: "暂无已提交文件" }), "提交后会在下方按阶段列出。"));
+    const combined = panel(
+      make("div", { className: "panel-head" }, make("h2", { text: "提交结果" }), make("span", { className: "small", text: "上方为质检结果，下方为已提交文件（按阶段）" })),
+      make("h3", { className: "check-section-title", text: "质检结果" }), outputBody,
+      make("h3", { className: "check-section-title", text: "已提交文件" }), submissionsBody);
     const checkStatus = item => item.review_status === "已通过" ? "已通过" :
       item.review_status === "退回修改" ? "退回修改" :
       item.review_status === "待审阅" ? (item.monitor_approved ? "待辅导员审阅" : "待学生管理员初审") : "已提交";
+    const stageOrder = ["application", "activist", "development-target", "probationary-acceptance", "probationary-regularization"];
+    const submissionRow = item => make("tr", {},
+      make("td", { text: item.material_name }),
+      make("td", {}, make("a", { className: "text-link small", href: "/api/checks/" + item.id + "/file", text: item.filename })),
+      make("td", { text: displayTime(item.checked_at) }),
+      make("td", {}, make("span", { className: "badge " + (item.review_status === "已通过" ? "done" : "missing"), text: checkStatus(item) })),
+      make("td", {},
+        item.review_status === "待审阅" && !item.viewed_at ? make("button", { type: "button", className: "text-link small", text: "撤销重发", onclick: async event => {
+          const btn = event.currentTarget; btn.disabled = true; btn.textContent = "撤销中…";
+          try { await post("/api/checks/" + item.id + "/withdraw", {}); await renderSubmitted(); }
+          catch (error) { btn.disabled = false; btn.textContent = "撤销重发"; alert(error.message); }
+        } }) : null));
     const renderSubmitted = async () => {
       try {
         const checks = (await api("/api/checks")).checks || [];
-        submittedRows.replaceChildren(...checks.map(item => make("tr", {},
-          make("td", { text: item.material_name }),
-          make("td", {}, make("a", { className: "text-link small", href: "/api/checks/" + item.id + "/file", text: item.filename })),
-          make("td", { text: displayTime(item.checked_at) }),
-          make("td", {}, make("span", { className: "badge " + (item.review_status === "已通过" ? "done" : "missing"), text: checkStatus(item) })),
-          make("td", {},
-            item.review_status === "待审阅" && !item.viewed_at ? make("button", { type: "button", className: "text-link small", text: "撤销重发", onclick: async event => {
-              const btn = event.currentTarget; btn.disabled = true; btn.textContent = "撤销中…";
-              try { await post("/api/checks/" + item.id + "/withdraw", {}); await renderSubmitted(); }
-              catch (error) { btn.disabled = false; btn.textContent = "撤销重发"; alert(error.message); }
-            } }) : null))));
-      } catch { submittedRows.replaceChildren(make("tr", {}, make("td", { colSpan: "5", text: "无法读取提交记录" }))); }
+        if (!checks.length) {
+          submissionsBody.replaceChildren(make("div", { className: "empty-state" }, make("strong", { text: "暂无已提交文件" }), "提交后会在下方按阶段列出。"));
+          return;
+        }
+        const grouped = new Map();
+        for (const item of checks) {
+          const key = item.stage_slug || "其他";
+          if (!grouped.has(key)) grouped.set(key, []);
+          grouped.get(key).push(item);
+        }
+        const sections = [...grouped.entries()]
+          .sort((a, b) => stageOrder.indexOf(a[0]) - stageOrder.indexOf(b[0]))
+          .map(([slug, items]) => [
+            make("h4", { className: "check-stage", text: items[0].stage_name || slug }),
+            tableWrap(make("table", { className: "data" }, make("thead", {}, make("tr", {}, ["材料", "文件", "提交时间", "状态", "操作"].map(x => make("th", { text: x })))), make("tbody", {}, ...items.map(submissionRow))))
+          ]);
+        submissionsBody.replaceChildren(...sections.flat());
+      } catch { submissionsBody.replaceChildren(make("div", { className: "empty-state" }, "无法读取提交记录")); }
     };
     renderSubmitted();
     form.addEventListener("submit", async event => {
@@ -1304,8 +1325,7 @@ function checkPage() {
         input.value = "";
         fileStatus.textContent = "";
         scannedFile = null;
-        output.replaceChildren(make("div", { className: "panel-head" }, make("h2", { text: inspected ? "质检结果" : "提交结果" }), inspected ? make("span", { className: "small", text: results.length + " 项结果" }) : null),
-          inspected ? make("div", { className: "results-list" },
+        outputBody.replaceChildren(inspected ? make("div", { className: "results-list" },
             results.length ? results.map(r => make("div", { className: "result-row" }, make("strong", { text: r.message }), p(r.suggestion))) :
               [make("div", { className: "result-row" }, make("strong", { text: "未发现格式问题" }), p("已完成当前规则检查。"))]) : null,
           notice(inspected ? "文件已提交，DOCX 格式检查已完成。" : "文件已提交，等待人工审阅。", "success"),
@@ -1320,7 +1340,7 @@ function checkPage() {
     });
     shell.replaceChildren(pageHead("STUDENT / SUBMISSION", "材料提交", "上传 Word、PDF 或图片，提交后可在下方查看和撤销。"),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "上传并提交材料" })),
-        p("DOCX 会检查标题、正文和落款格式。旧版 Word、PDF 和图片提交后由人工审阅。"), form), output, submittedPanel);
+        p("DOCX 会检查标题、正文和落款格式。旧版 Word、PDF 和图片提交后由人工审阅。"), form), combined);
   } catch (error) { shell.replaceChildren(pageHead("STUDENT / SUBMISSION", "材料提交"), notice(error.message, "error")); } })();
   return shell;
 }

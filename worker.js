@@ -545,7 +545,7 @@ export async function checkRoutes(request, env, path, user, audit = {}) {
       values.push(new Date(since).toISOString());
     }
     if (params.get("before")) { conditions.push("c.id<?"); values.push(id(params.get("before"))); }
-    const query = "SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,c.monitor_approved,c.viewed_at,m.name AS material_name,p.name AS student_name,u.class_id,cl.name AS class_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id JOIN users u ON u.id=c.student_id LEFT JOIN classes cl ON cl.id=u.class_id WHERE ";
+    const query = "SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,c.monitor_approved,c.viewed_at,m.name AS material_name,m.stage_slug,s.name AS stage_name,p.name AS student_name,u.class_id,cl.name AS class_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN stages s ON s.slug=m.stage_slug JOIN profiles p ON p.user_id=c.student_id JOIN users u ON u.id=c.student_id LEFT JOIN classes cl ON cl.id=u.class_id WHERE ";
     const { results } = await env.DB.prepare(query + conditions.join(" AND ") + " ORDER BY c.id DESC LIMIT 51").bind(...values).all();
     const classes = user.role === "student" ? { results: [] } : allClasses
       ? await env.DB.prepare("SELECT id,name FROM classes ORDER BY name").all()
