@@ -449,7 +449,7 @@ body[data-page=bootstrap] .auth-form > .field:last-of-type { grid-column: 1/-1; 
   justify-content: flex-end;
 }
 .page-head-greeting .greeting-title {
-  font-family: var(--body);
+  font-family: 'STXingkai', 'Xingkai SC', 'KaiTi', 'STKaiti', '华文行楷', '楷体', serif;
   font-size: clamp(26px, 3vw, 36px);
   font-weight: 500;
   color: var(--ink);
