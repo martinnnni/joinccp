@@ -877,6 +877,22 @@ async function createInvites(env, user, data, finish = null) {
 export async function adminRoutes(request, env, path, user, audit = {}) {
   if (!path.startsWith("/api/admin/")) return null;
   assert(isStaff(user), "需要辅导员或管理员权限", 403);
+  if (path === "/api/admin/materials/deadline" && request.method === "POST") {
+    const data = await bodyJson(request);
+    const materialId = id(data.materialId), deadline = clean(data.deadline, 40);
+    assert(materialId, "请选择材料");
+    const material = await env.DB.prepare("SELECT id,name FROM materials WHERE id=?").bind(materialId).first();
+    assert(material, "材料不存在", 404);
+    if (deadline) {
+      assert(/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/.test(deadline), "截止时间格式无效，请用 YYYY-MM-DD 或 YYYY-MM-DD HH:MM");
+      await env.DB.prepare("UPDATE materials SET deadline=? WHERE id=?").bind(deadline, materialId).run();
+    } else {
+      await env.DB.prepare("UPDATE materials SET deadline=NULL WHERE id=?").bind(materialId).run();
+    }
+    audit.action = "set_deadline";
+    audit.targets = material.name;
+    return json({ ok: true, message: deadline ? "已设置「" + material.name + "」的截止时间。" : "已清除「" + material.name + "」的截止时间。" });
+  }
   if (path === "/api/admin/students/auto-register" && request.method === "POST") {
     requireSecret(env);
     assert(user.role === "counselor", "仅辅导员可执行自动注册", 403);
@@ -933,7 +949,7 @@ export async function adminRoutes(request, env, path, user, audit = {}) {
       ? await env.DB.prepare("SELECT id,major_id,name,monitor_user_id FROM classes ORDER BY id").all()
       : await env.DB.prepare("SELECT id,major_id,name,monitor_user_id FROM classes WHERE major_id IN (SELECT id FROM majors WHERE grade_id=?) ORDER BY id").bind(user.grade_id).all();
     const nodes = await env.DB.prepare("SELECT slug,stage_slug,name,position FROM nodes ORDER BY stage_slug,position").all();
-    const materials = await env.DB.prepare("SELECT id,name,stage_slug FROM materials ORDER BY id").all();
+    const materials = await env.DB.prepare("SELECT id,name,stage_slug,deadline FROM materials ORDER BY id").all();
     const invites = user.role === "admin"
       ? await env.DB.prepare("SELECT i.id,i.role,i.grade_id,g.name AS grade_name,i.expires_at,i.used_by FROM invites i LEFT JOIN grades g ON g.id=i.grade_id ORDER BY i.id DESC LIMIT 100").all()
       : await env.DB.prepare("SELECT i.id,i.role,i.grade_id,g.name AS grade_name,i.expires_at,i.used_by FROM invites i LEFT JOIN grades g ON g.id=i.grade_id WHERE i.grade_id=? ORDER BY i.id DESC LIMIT 100").bind(user.grade_id).all();
@@ -1242,6 +1258,10 @@ async function executeOfficeTask(env, user, plan, planId) {
       await setMonitor(env, user, plan);
       await finish.run();
       return { count, message: "已设置学生管理员。" };
+    case "set_deadline":
+      await env.DB.prepare("UPDATE materials SET deadline=? WHERE id=?").bind(plan.deadline, plan.materialId).run();
+      await finish.run();
+      return { count, message: "已设置材料截止时间。" };
   }
 }
 
@@ -1268,6 +1288,13 @@ async function normalizeOfficeAction(env, user, action, files) {
     else if (gradeId !== null) { where += " AND u.grade_id=?"; args.push(gradeId); }
     const counselors = await env.DB.prepare("SELECT u.name,u.username,g.name AS grade_name FROM users u LEFT JOIN grades g ON g.id=u.grade_id WHERE " + where + " ORDER BY u.id").bind(...args).all();
     return { answer: counselors.results.length ? "辅导员名单\n" + counselors.results.map(c => (c.name || c.username) + "（" + c.username + "） · " + (c.grade_name || "未分配年级")).join("\n") : "没有找到符合条件的辅导员。" };
+  }
+  if (type === "set_deadline") {
+    const material = await env.DB.prepare("SELECT id,name FROM materials WHERE id=?").bind(id(action.materialId)).first();
+    assert(material, "材料不存在", 404);
+    const deadline = clean(action.deadline, 40);
+    assert(/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/.test(deadline), "截止时间格式无效，请用 YYYY-MM-DD 或 YYYY-MM-DD HH:MM");
+    return { type, materialId: material.id, deadline, preview: "将设置「" + material.name + "」的截止时间为 " + deadline + "。" };
   }
   if (["delete_students", "send_notifications", "advance_students", "list_students"].includes(type)) {
     const limit = ["send_notifications", "advance_students"].includes(type) ? 500 : 20;
@@ -1508,7 +1535,7 @@ export async function officeRoutes(request, env, path, user, audit = {}) {
     assert(files.length <= 10, "一次最多上传 10 个文件");
     const catalog = {
       stages: (await env.DB.prepare("SELECT slug,name FROM stages ORDER BY position").all()).results,
-      materials: (await env.DB.prepare("SELECT name,stage_slug FROM materials ORDER BY id").all()).results,
+      materials: (await env.DB.prepare("SELECT id,name,stage_slug FROM materials ORDER BY id").all()).results,
       colleges: (await env.DB.prepare("SELECT id,name FROM departments ORDER BY name").all()).results,
       grades: (await env.DB.prepare("SELECT id,college_id,name FROM grades ORDER BY id").all()).results,
       majors: user.role === "admin" ? (await env.DB.prepare("SELECT id,college_id,grade_id,name FROM majors ORDER BY id").all()).results :

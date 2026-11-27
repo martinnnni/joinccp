@@ -11,6 +11,7 @@ const operations = {
   list_students: ["{students:[{student}]} 或 {audience:{classId?,majorId?,gradeId?,stageSlug?,all?}}。gradeId 表示某年级全体，all:true 表示全体学生。用于查看可管理的学生和培养阶段", null, ["students", "audience"]],
   list_submissions: ["{student?,pendingOnly?}，查看已提交材料，pendingOnly 为布尔值，true 时只看待审阅记录。可指定具体学生", null, ["student", "pendingOnly"]],
   list_counselors: ["{} 或 {gradeId?}，查看辅导员名单，{} 表示全体辅导员（辅导员仅能查看本人年级）", null, ["gradeId"]],
+  set_deadline: ["{materialId,deadline}，为材料设置截止时间，deadline 格式 YYYY-MM-DD 或 YYYY-MM-DD HH:MM，无时间则当天 23:59", null, ["materialId", "deadline"]],
   register_counselors: ["{gradeId,counselors:[{name,username}]}", "counselors", ["gradeId"], true],
   delete_counselors: ["{counselors:[{username}]}，仅在用户明确要求删除时规划，必须提供确切用户名", "counselors", [], true],
   create_invites: ["{gradeId,count}，为指定年级生成辅导员邀请码", null, ["gradeId", "count"], true],

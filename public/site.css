@@ -87,7 +87,14 @@
 .check-section-title { margin: var(--s-4) 0 var(--s-3); font-size: 15px; font-weight: 600; color: var(--ink); }
 .check-section-title:first-of-type { margin-top: 0; }
 .check-stage { margin: var(--s-4) 0 var(--s-2); font-size: 14px; font-weight: 600; color: var(--accent-deep); }
-.check-output, .check-submissions { min-height: 0; }
+.check-subpanel {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-md);
+  padding: var(--s-4);
+}
+.check-subpanel .results-list, .check-subpanel .data-wrap { margin-bottom: 0; }
+.deadline-text { margin: 0; color: var(--accent-deep); font-weight: 600; font-size: 16px; line-height: 1.5; }
 
 /* ---------- 基础 ---------- */
 * { box-sizing: border-box; }
@@ -412,19 +419,30 @@ body[data-page=bootstrap] .auth-form > .field:last-of-type { grid-column: 1/-1; 
   font: 700 clamp(38px, 4.6vw, 62px)/1.1 var(--display);
   letter-spacing: -.02em;
 }
-.page-title .greeting-title {
-  font-family: 'STXingkai', 'Xingkai SC', 'KaiTi', 'STKaiti', '华文行楷', '楷体', serif;
-  font-weight: 500;
-  letter-spacing: .01em;
+.page-head-greeting {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  text-align: right;
+  white-space: nowrap;
+  padding-bottom: 4px;
 }
-.greeting-line {
-  margin: 10px 0 0;
-  color: var(--accent);
-  font: 500 clamp(24px, 3vw, 34px)/1.2 'STXingkai', 'Xingkai SC', 'KaiTi', 'STKaiti', '华文行楷', '楷体', serif;
-  letter-spacing: .02em;
+.page-head-greeting .greeting-title {
+  font-family: 'STXingkai', 'Xingkai SC', 'KaiTi', 'STKaiti', '华文行楷', '楷体', serif;
+  font-size: clamp(26px, 3vw, 36px);
+  font-weight: 500;
+  color: var(--ink);
+  letter-spacing: .01em;
+  line-height: 1.15;
+}
+.greeting-clock {
+  font: 500 13px/1 var(--mono);
+  color: var(--muted);
+  letter-spacing: .04em;
 }
 @media (max-width: 767px) {
-  .page-title .greeting-title, .greeting-line { display: none; }
+  .page-head-greeting { display: none; }
 }
 .page-head p { max-width: 440px; margin: 12px 0 0; color: var(--muted); font-size: 15px; }
 
