@@ -485,6 +485,8 @@ function profilePage() {
       make("span", { className: "deadline-label", text: "即将截止" }),
       make("p", { className: "deadline-text", text: "正在计算…" }));
     const deadlineText = deadlineEl.querySelector(".deadline-text");
+    const deadlineFile = make("span", { className: "deadline-file" });
+    const deadlineRemaining = make("span", { className: "deadline-remaining" });
     {
       const parseDeadline = raw => {
         const s = String(raw || "");
@@ -496,11 +498,14 @@ function profilePage() {
         .sort((a, b) => a.dl - b.dl);
       if (upcoming.length) {
         const next = upcoming[0];
+        deadlineFile.textContent = "待交材料：" + next.name;
+        deadlineText.replaceChildren(deadlineFile, deadlineRemaining);
         const tick = () => {
+          if (deadlineTimer && !deadlineEl.isConnected) { clearInterval(deadlineTimer); return; }
           const diff = next.dl - new Date();
-          if (diff <= 0) { deadlineText.textContent = "「" + next.name + "」已到截止时间，请尽快提交。"; clearInterval(deadlineTimer); return; }
+          if (diff <= 0) { deadlineRemaining.textContent = "已截止，请尽快提交"; clearInterval(deadlineTimer); return; }
           const d = Math.floor(diff / 86400000), h = Math.floor(diff % 86400000 / 3600000), m = Math.floor(diff % 3600000 / 60000), s = Math.floor(diff % 60000 / 1000);
-          deadlineText.textContent = "下一份需要提交的文件：" + next.name + " · 剩余 " + d + " 天 " + h + " 小时 " + m + " 分 " + s + " 秒";
+          deadlineRemaining.replaceChildren("剩余 ", ...[d + " 天", h + " 小时", m + " 分", s + " 秒"].map(text => make("span", { className: "deadline-unit", text })));
         };
         tick();
         deadlineTimer = setInterval(tick, 1000);

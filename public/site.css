@@ -96,9 +96,12 @@
 .check-subpanel .results-list, .check-subpanel .data-wrap { margin-bottom: 0; }
 .check-subpanel .empty-state { text-align: center; }
 .deadline-text { margin: 0; color: var(--accent-deep); font-weight: 600; font-size: 16px; line-height: 1.5; }
-.deadline-box { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-top: 4px; text-align: right; max-width: 420px; }
+.deadline-box { display: grid; gap: 6px; width: min(100%, 360px); min-width: 0; margin-top: 10px; padding: 12px 14px; border: 1px solid var(--line); border-left: 2px solid var(--accent); border-radius: var(--r-sm); background: var(--surface); text-align: left; white-space: normal; }
 .deadline-box .deadline-label { flex: none; font: 600 11px/1 var(--mono); color: var(--accent); letter-spacing: .08em; }
-.deadline-box .deadline-text { font-size: 14px; line-height: 1.45; white-space: normal; }
+.page-head .deadline-box .deadline-text { display: grid; gap: 5px; max-width: 100%; margin: 0; font-size: 13px; font-weight: 400; line-height: 1.6; white-space: normal; }
+.deadline-file { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
+.deadline-remaining { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.deadline-unit { white-space: nowrap; }
 .status-cell .status-head { margin-bottom: 4px; }
 .status-cell .status-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .status-cell .status-actions .btn.secondary { min-height: 30px; padding: 4px 12px; font-size: 13px; }
@@ -435,11 +438,15 @@ body[data-page=bootstrap] .auth-form > .field:last-of-type { grid-column: 1/-1; 
   text-align: right;
   white-space: nowrap;
   padding-bottom: 4px;
+  min-width: 0;
+  max-width: 100%;
 }
 .greeting-row {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .page-head-greeting .greeting-title {
   font-family: 'STXingkai', 'Xingkai SC', 'KaiTi', 'STKaiti', '华文行楷', '楷体', serif;
