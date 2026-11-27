@@ -13,9 +13,12 @@ RATE_API_PER_MINUTE=600
 RATE_MUTATION_PER_MINUTE=300
 RATE_AUTH_PER_15_MINUTES=80
 RATE_AI_PER_MINUTE=60
+RATE_AGENT_PER_MINUTE=20
 RATE_UPLOAD_PER_10_MINUTES=120
 AUTH_PEPPER=replace-with-the-existing-production-value
 BOOTSTRAP_TOKEN=replace-with-a-random-value
 DEEPSEEK_API_KEY=replace-with-the-api-key
 RAG_MIN_SIMILARITY=0.32
 INTENT_MODEL=deepseek-flash
+# 学生成长导师「站内操作」开关；设为 false 时只保留问答，关闭全部站内动作。
+AGENT_ACTIONS_ENABLED=true

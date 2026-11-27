@@ -7,7 +7,8 @@
  */
 
 html {
-  min-width: 320px;
+  min-width: 0;
+  width: 100%;
   max-width: 100%;
   overflow-x: clip;
   -webkit-text-size-adjust: 100%;
@@ -16,13 +17,25 @@ html {
 
 body {
   width: 100%;
+  min-width: 0;
   max-width: 100%;
   overflow-x: clip;
 }
 
-img, svg, video, canvas, iframe { max-width: 100%; }
+img, svg, video, canvas, iframe { max-width: 100%; height: auto; }
 input, select, textarea, button { max-width: 100%; }
-.main, .view, .panel, .data-wrap, .auth-layout, .auth-card, .auth-form { min-width: 0; }
+.site-header, .site-footer, .header-inner, .main, .view, .view > *, .panel, .panel > *,
+.panel-head, .panel-head > *, .metric-grid, .metric, .data-wrap, .auth-layout,
+.auth-card, .auth-form, .form-grid, .form-upload, .inline-form, .bulk-tools,
+.notice-item, .form-item, .office-roster-row, .mentor-app, .mentor-main {
+  min-width: 0;
+  max-width: 100%;
+}
+.page-title, .panel h2, .panel h3, .metric-value, .metric-note, .small,
+.notice, .notice-item, .form-feedback, .invite-output {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .data-wrap { max-width: 100%; overscroll-behavior-inline: contain; -webkit-overflow-scrolling: touch; }
 .mentor-panel, dialog { max-width: 100vw; }
 
@@ -191,7 +204,11 @@ input, select, textarea, button { max-width: 100%; }
   .page-title { font-size: clamp(32px, 9.5vw, 44px); overflow-wrap: anywhere; }
   .page-head p { max-width: none; }
   .panel, .panel-head, .view, .view > * { min-width: 0; max-width: 100%; }
-  .panel { margin-bottom: 26px; padding-top: 20px; }
+  .panel {
+    width: 100%;
+    margin-bottom: 26px;
+    padding: 20px clamp(16px, 4.5vw, 22px);
+  }
   .panel-head { align-items: flex-start; flex-wrap: wrap; gap: 10px; }
   .panel-head > .btn, .panel-head > .secondary { width: 100%; }
   .view-profile, .view-check, .metric-grid, .view-profile > .metric-grid,
@@ -200,8 +217,20 @@ input, select, textarea, button { max-width: 100%; }
   }
   .view-profile > *, .view-check > *, .form-grid > *, .form-upload > *, .office-roster-row > * { grid-column: 1 !important; }
   .view-profile > .panel:first-of-type { padding: 22px 20px; background-position: center, 62% 48%; }
-  .metric { padding: 16px 0 !important; }
-  .metric + .metric { padding-left: 0 !important; border-left: 0 !important; border-top: 1px solid var(--line); }
+  .metric { padding: 14px 16px !important; }
+  .metric + .metric { padding-left: 16px !important; border-left: 0 !important; border-top: 1px solid var(--line); }
+  /* 只限制尺寸与换行，不改变原有上下排版和左对齐。 */
+  .metric-grid .metric { display: block !important; width: 100%; min-width: 0; }
+  .metric-grid .metric-value {
+    display: block;
+    max-width: 100%;
+    margin-top: 6px;
+    font-size: clamp(24px, 8vw, 30px) !important;
+    line-height: 1.2;
+    text-align: left !important;
+    overflow-wrap: anywhere;
+  }
+  .metric-grid .metric-note { max-width: 100%; }
   .inline-form, .bulk-tools, .form-actions, .upload-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .inline-form > *, .bulk-tools > *, .form-actions > *, .upload-actions > * { width: 100% !important; min-width: 0 !important; }
   .btn, .secondary { min-height: 44px; }
@@ -220,7 +249,7 @@ input, select, textarea, button { max-width: 100%; }
   table.data th { white-space: nowrap; }
   .bulk-select { position: sticky; left: 0; z-index: 2; background: var(--surface); }
 
-  .notice-item { grid-template-columns: 2px minmax(0, 1fr); gap: 12px; }
+  .notice-item { grid-template-columns: 8px minmax(0, 1fr); gap: 12px; }
   .notice-item time, .notice-item button { grid-column: 2; justify-self: start; }
   .form-item { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .form-actions { justify-content: stretch; }
@@ -235,7 +264,7 @@ input, select, textarea, button { max-width: 100%; }
   .scan-content { padding: 10px 0; }
   .operation-result { width: 100%; }
 
-  /* 原有小人保留，但收小并为正文预留底部空间。 */
+  /* 保留原有小人、标签和帧动画，只为页面预留底部空间。 */
   .mentor-fab { right: 10px; bottom: calc(10px + env(safe-area-inset-bottom)); }
   .mentor-fab-girl { width: 52px; height: 56px; }
   .mentor-fab-label { min-height: 38px; padding: 7px 12px; font-size: 12px; }
@@ -249,6 +278,38 @@ input, select, textarea, button { max-width: 100%; }
   .mentor-composer-box { width: 100%; }
 
   .footer-inner { display: grid; gap: 5px; padding-block: 18px calc(82px + env(safe-area-inset-bottom)); }
+}
+
+/*
+ * 某些手机的“桌面版网页”会把布局视口伪装成 980px 左右。
+ * 对无悬停、粗指针设备额外收拢高风险多列区域，避免它们撑出屏幕。
+ */
+@media (hover: none) and (pointer: coarse) and (max-width: 1180px) {
+  .view-profile, .view-check { grid-template-columns: minmax(0, 1fr); }
+  .view-profile > *, .view-check > * { grid-column: 1 !important; }
+  .form-upload { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .panel-head { flex-wrap: wrap; }
+  .panel-head > .small { flex-basis: 100%; }
+  .review-preview, .action-dialog, .scan-overlay-card {
+    max-width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+  }
+}
+
+/* 极窄屏与分屏模式：控制内边距和浮层宽度，不以隐藏内容换取“适配”。 */
+@media (max-width: 380px) {
+  :root { --page-gutter: 14px; }
+  .panel { padding-inline: 14px; }
+  .page-title { font-size: clamp(29px, 9vw, 36px); }
+  .panel-head h2 { font-size: clamp(19px, 6vw, 23px); }
+  .school-wordmark { max-width: calc(100vw - 28px); }
+  .mentor-thread { padding-inline: 14px !important; }
+  .mentor-composer { padding-inline: 14px; }
+  .review-preview, .action-dialog, .scan-overlay-card {
+    width: calc(100vw - 12px) !important;
+    max-height: calc(100dvh - 12px);
+    padding: 12px;
+  }
 }
 
 /* 横屏手机：保持紧凑，但仍不回退到完整桌面工作区。 */

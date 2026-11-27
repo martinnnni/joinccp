@@ -188,6 +188,31 @@
   height: 180px;
   pointer-events: none;
 }
+.mentor-hero-close {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px; height: 20px; padding: 0;
+  pointer-events: auto;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent, #a51f2d);
+  color: #fff;
+  font-size: 13px; line-height: 1; cursor: pointer;
+  box-shadow: 0 2px 6px rgba(28, 21, 23, .28);
+}
+.mentor-hero-close:hover { background: var(--accent-deep, #8f1a28); }
+.mentor-hero-restore {
+  pointer-events: auto;
+  width: 30px; height: 30px; padding: 0;
+  border: 1px solid var(--line, #e8e1e1); border-radius: 8px;
+  background: rgba(255, 255, 255, .78); color: var(--muted, #6b5f62);
+  font-size: 17px; line-height: 1; cursor: pointer;
+}
+.mentor-hero-restore:hover { color: var(--accent, #a51f2d); }
+.mentor-hero-restore[hidden] { display: none; }
+.mentor-app.hero-collapsed .mentor-hero { display: none; }
+.mentor-app.hero-collapsed .mentor-thread { padding-top: 64px; }
 .mentor-girl {
   position: absolute;
   top: 0;
@@ -370,3 +395,6 @@
   .mentor-app *, .mentor-app *::before, .mentor-app *::after,
   .mentor-fab, .mentor-panel, .mentor-panel * { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
 }
+
+.mentor-plan-preview { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--mentor-line, #eee); border-left: 3px solid var(--mentor-accent, #c6282f); border-radius: 8px; background: #fff; color: var(--mentor-ink, #1c1c1c); font-size: 13px; white-space: pre-wrap; }
+.mentor-bubble .btn { margin-top: 10px; }

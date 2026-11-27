@@ -5,6 +5,8 @@ import { extractRosterText, readStructuredStudentRoster } from "./roster.js";
 import { deriveVerifier } from "./pbkdf2.js";
 import { fileExtension, materialAccept, maxBatchBytes, maxFileBytes, normalizedAttachment, officeAccept, uploadType } from "../upload-types.js";
 import { decodeImage, processImage, rotateScan, validCrop } from "./scan.js";
+import { expandZip } from "./zip.js";
+import { updateWatermark, watermarkInspector } from "./watermark.js";
 
 const root = document.getElementById("app");
 const navigation = document.getElementById("navigation");
@@ -12,6 +14,7 @@ let me = null;
 let config = null;
 let mentorHistory = [];
 let mentorEpoch = 0;
+let mentorConversationId = "";
 const make = (tag, props = {}, ...children) => {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
@@ -27,6 +30,7 @@ const make = (tag, props = {}, ...children) => {
   return node;
 };
 const mentorTitle = () => (me && (me.role === "counselor" || me.role === "admin")) ? "办公助理" : "成长导师";
+const agentRouteLabel = route => ({ profile: "我的档案", forms: "资料下载", check: "材料提交", notifications: "通知中心" })[route] || route;
 const mentorErrorText = (code, message) => "错误代码 " + code + "：" + message + "。请将错误代码报告给你的导员和支持部门。";
 const renderMarkdown = src => {
   const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -77,11 +81,25 @@ const renderMarkdown = src => {
   if (inCode) out += "<pre><code>" + esc(codeBuf.join("\n")) + "</code></pre>";
   return out;
 };
-const h = text => make("h1", { className: "page-title", text });
+const h = (text, cls = "page-title") => make("h1", { className: cls, text });
 const p = text => make("p", { text });
 const panel = (...children) => make("section", { className: "panel" }, children);
-const pageHead = (code, title, description = "") => make("div", { className: "page-head" },
-  make("div", {}, h(title), description ? p(description) : null));
+const pageHead = (code, title, description = "", greeting = null, titleClass = "") => make("div", { className: "page-head" },
+  make("div", {}, typeof title === "string" ? h(title, titleClass) : title, description ? p(description) : null), greeting);
+const dayPart = () => {
+  const h = new Date().getHours();
+  return h >= 5 && h < 9 ? "早晨" : h >= 9 && h < 12 ? "上午" : h >= 12 && h < 14 ? "中午" : h >= 14 && h < 18 ? "下午" : "晚上";
+};
+const greetingClock = (greetText, extra = null) => {
+  const clock = make("span", { className: "greeting-clock" });
+  const el = make("div", { className: "page-head-greeting" },
+    make("div", { className: "greeting-row" }, make("span", { className: "greeting-title", text: greetText }), clock),
+    ...(extra ? [extra] : []));
+  const tick = () => { clock.textContent = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date()); };
+  tick();
+  const timer = setInterval(() => { if (el.isConnected) tick(); else clearInterval(timer); }, 1000);
+  return el;
+};
 const metric = (label, value, note = "", accent = false) => make("div", { className: "metric" },
   make("span", { className: "metric-label", text: label }),
   make("strong", { className: "metric-value" + (accent ? " accent" : ""), text: value }),
@@ -199,6 +217,7 @@ function recordActivity(event) {
   if (me && !me.must_change_password) post("/api/activity", { event }).catch(() => {});
 }
 let lastVisitedPage;
+let pendingScroll = null;
 function navigate(page) { location.hash = page; render(); }
 function nav() {
   navigation.replaceChildren();
@@ -206,11 +225,12 @@ function nav() {
   const active = location.hash.slice(1) || (me ? me.role === "student" ? "profile" : "admin" : "login");
   const items = me?.must_change_password ? [["password", "设置新密码"]] : me ? (me.role === "student"
     ? [["profile", "我的档案"], ["forms", "资料下载"], ["check", "材料提交"], ...(me.is_monitor ? [["checks", "班级材料"]] : []), ["mentor", "成长导师"], ["notifications", "通知"]]
-    : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"]])
+    : [["admin", "工作台"], ["forms", "资料下载"], ["checks", "已提交文件"], ["hierarchy", "管理体系"], ["recycle", "回收站"]])
     : (config?.initialized ? [] : [["bootstrap", "初始化"]]);
   const scroll = make("div", { className: "nav-scroll" });
   for (const [page, label] of items) {
     const link = make("a", { href: "#" + page, text: label, className: active === page ? "active" : "" });
+    if (page === "notifications" && unreadNotifications > 0) link.append(make("span", { className: "nav-badge", text: String(unreadNotifications), "aria-label": unreadNotifications + " 条未读通知" }));
     if (page === "mentor") link.addEventListener("click", event => { event.preventDefault(); openMentor(); });
     scroll.append(link);
   }
@@ -221,19 +241,57 @@ function nav() {
       make("summary", { text: "个人资料", "aria-label": "个人资料菜单" }),
       make("div", { className: "nav-profile-menu" },
         make("div", { className: "nav-profile-name", text: me.name || me.username }),
-        ...(isStaffUser() && !me.must_change_password ? [
-          make("a", { href: "#operations", text: "操作记录" }),
-          make("a", { href: "#recycle", text: "回收站" })
-        ] : []),
+        make("a", { href: "#operations", text: "操作记录" }),
+        me.role === "admin" ? make("a", { href: "#watermark", text: "水印溯源" }) : null,
         make("a", { href: "#password", text: "修改密码" }),
-        button("登出", logout, "linklike")));
+        button("退出", logout, "linklike")));
     navigation.append(profileMenu);
   }
 }
 async function refreshMe() {
-  try { me = (await api("/api/me")).user; } catch { me = null; }
+  try { const data = await api("/api/me"); me = data.user; updateWatermark(data.watermark); }
+  catch { me = null; updateWatermark(null); }
+}
+let unreadNotifications = 0;
+async function refreshUnreadNotifications() {
+  if (!me || me.role !== "student" || me.must_change_password) { unreadNotifications = 0; return []; }
+  try {
+    const data = await api("/api/notifications");
+    const unread = data.notifications.filter(item => !item.is_read);
+    unreadNotifications = unread.length;
+    return unread;
+  } catch { unreadNotifications = 0; return []; }
+}
+function notificationPopup(unread) {
+  if (!unread.length) return;
+  const first = unread[0], more = unread.length - 1;
+  const dialog = make("dialog", { className: "scan-overlay-card notification-popup", "aria-label": "新通知" },
+    make("div", { className: "notice-popup-head" },
+      make("h2", { text: "通知" }),
+      make("button", { type: "button", className: "notice-popup-close", "aria-label": "关闭", onclick: () => dialog.close() }, "×")));
+  const body = make("div", { className: "notice-popup-body" },
+    make("p", { className: "notice-popup-title", text: first.title }),
+    p(first.content),
+    more > 0 ? p("另有 " + more + " 条未读通知，可在通知中心查看。") : null);
+  const detail = button("详情", () => { dialog.close(); navigate("notifications"); }, "secondary");
+  const markRead = button("标为已读", async () => {
+    markRead.disabled = true;
+    try {
+      for (const item of unread) await post("/api/notifications/" + item.id + "/read", {});
+      unreadNotifications = 0;
+      nav();
+      dialog.close();
+    } catch (error) { markRead.disabled = false; }
+  });
+  dialog.append(body, make("div", { className: "upload-actions" }, detail, markRead));
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  document.body.append(dialog);
+  dialog.showModal();
 }
 function render() {
+  if (!me) updateWatermark(null);
+  const prevPage = document.body.dataset.page;
+  const scrollY = window.scrollY;
   document.body.dataset.surface = me ? "workspace" : "entry";
   document.body.dataset.role = me?.role || "guest";
   const fabLabel = document.querySelector("#mentorFab .mentor-fab-label");
@@ -253,14 +311,17 @@ function render() {
   else if (me.must_change_password) root.replaceChildren(passwordPage());
   else if (page === "password") root.replaceChildren(passwordPage());
   else if (page === "forms") root.replaceChildren(formsPage());
+  else if (page === "watermark" && me.role === "admin") root.replaceChildren(watermarkInspector({ make, post }));
   else if (page === "checks" && me.role === "student" && me.is_monitor) root.replaceChildren(checksPage(true));
   else if (me.role === "student") root.replaceChildren(
-    page === "check" ? checkPage() : page === "mentor" ? mentorPage() : page === "notifications" ? notificationsPage() : profilePage());
-  else root.replaceChildren(page === "checks" ? checksPage() : ["operations", "recycle"].includes(page) ? recordsPage(page) : adminPage());
+    page === "check" ? checkPage() : page === "mentor" ? mentorPage() : page === "notifications" ? notificationsPage() : page === "operations" ? recordsPage("operations") : profilePage());
+  else root.replaceChildren(page === "checks" ? checksPage() : page === "hierarchy" ? hierarchyPage() : ["operations", "recycle"].includes(page) ? recordsPage(page) : adminPage());
   if (operationFeedback) {
     root.prepend(make("p", { className: "form-feedback operation-result", role: "status", "data-kind": "success", text: operationFeedback }));
     operationFeedback = "";
   }
+  pendingScroll = prevPage === page ? scrollY : null;
+  if (pendingScroll !== null) window.scrollTo(0, pendingScroll);
 }
 function accountForm(title, includeInvite = false, includeBootstrap = false) {
   const registrationFields = includeInvite ? make("div", { className: "form-grid" },
@@ -289,7 +350,9 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
       config = await api("/api/config");
       await refreshMe();
       resetMentorPanel();
+      const unread = me?.role === "student" && !me.must_change_password ? await refreshUnreadNotifications() : [];
       navigate(me?.must_change_password ? "password" : me?.role === "student" ? "profile" : "admin");
+      if (unread.length) notificationPopup(unread);
     } catch (error) { feedback(form, error.message); }
     finally { release(); }
   });
@@ -304,16 +367,6 @@ function accountForm(title, includeInvite = false, includeBootstrap = false) {
       button(includeInvite ? "返回登录" : "辅导员注册", () => navigate(includeInvite ? "login" : "register"), "linklike")));
   card.classList.add("auth-card");
   const story = make("div", { className: "auth-story" },
-    make("div", { className: "orbit-field", "aria-hidden": "true" },
-      make("span", { className: "orbit-ring orbit-ring-one" }),
-      make("span", { className: "orbit-ring orbit-ring-two" }),
-      make("span", { className: "orbit-ring orbit-ring-three" }),
-      make("span", { className: "orbit-center" }),
-      make("span", { className: "orbit-node orbit-node-one" }),
-      make("span", { className: "orbit-node orbit-node-two" }),
-      make("span", { className: "orbit-node orbit-node-three" }),
-      make("span", { className: "orbit-node orbit-node-four" }),
-      make("span", { className: "orbit-node orbit-node-five" })),
     make("div", { className: "auth-story-copy" },
       make("span", { className: "story-intro", text: "中国民航大学 / 培养流程" }),
       make("h1", {}, "党员发展计划", make("br"), "辅助系统"),
@@ -361,7 +414,7 @@ function recordsPage(page) {
   const description = recycle ? "恢复已移除的账号及其档案。" : "查询访问、提交及后台操作，时间使用北京时间。";
   const body = make("div");
   const rows = make("tbody");
-  const columns = recycle ? ["账号", "角色", "班级", "移除时间", "操作"] : ["时间", "操作者", "操作", "HTTP 状态", "对象编号"];
+  const columns = recycle ? ["账号", "角色", "班级", "移除时间", "操作"] : ["时间", "操作者", "操作", "IP", "对象"];
   const table = tableWrap(make("table", { className: "data" }, make("thead", {}, make("tr", {}, columns.map(text => make("th", { text })))), rows));
   let cursor = "";
   const more = button("加载更多", load, "secondary");
@@ -382,6 +435,7 @@ function recordsPage(page) {
         ] : [
           displayTime(item.occurred_at), item.actor_name || item.actor_role || "访客",
           ({
+            login: "登录", submit_check: "提交材料",
             archive_student: "学生移入回收站", archive_counselor: "辅导员移入回收站", restore_account: "恢复账号",
             view_profile: "查看培养档案", view_check: "打开材料提交", view_checks: "查看审阅队列",
             view_forms: "打开资料下载", view_notifications: "查看通知", view_admin: "打开工作台",
@@ -392,7 +446,7 @@ function recordsPage(page) {
             dialog_confirm: "确认操作", dialog_cancel: "取消操作", download_official_form: "下载公开表格",
             daily_reminders: "执行定时提醒"
           })[item.action] || item.method + " " + item.action,
-          String(item.status), item.targets || "—"
+          item.ip || "—", item.targets || "—"
         ];
         rows.append(make("tr", {}, cells.map(value => make("td", {}, value))));
       }
@@ -409,7 +463,17 @@ function recordsPage(page) {
 }
 
 function profilePage() {
-  const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", "我的档案", "查看当前培养阶段、下一步节点和材料完成情况。"), notice("正在读取档案…"));
+  const profileTitle = () => make("h1", { className: "page-title" }, make("span", { text: "我的发展档案" }));
+  const profileGreeting = extra => {
+    const greeting = greetingClock(dayPart() + "好！");
+    const row = greeting.querySelector(".greeting-row");
+    const box = extra || make("div", { className: "deadline-box" });
+    const details = make("div", { className: "deadline-details" }, ...box.childNodes);
+    box.replaceChildren(details, row);
+    greeting.append(box);
+    return greeting;
+  };
+  const shell = make("div", { className: "view view-profile" }, pageHead("STUDENT / OVERVIEW", profileTitle(), "在这里统一查看当前培养阶段、下一步节点和材料完成情况。", profileGreeting()), skeleton());
   (async () => { try {
     const data = await api("/api/profile");
     const profile = data.profile;
@@ -417,7 +481,8 @@ function profilePage() {
     const stageNumber = Math.max(1, stageOrder.indexOf(profile.current_stage_slug) + 1);
     const materialState = x => x.review_status === "退回修改" ? "退回修改" :
       x.review_status === "已通过" || x.status === "已通过" ? "已通过" :
-      x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待班长初审" : x.status || "未提交";
+      x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待学生管理员初审" :
+      x.status === "已交" ? "已提交" : "未提交";
     const done = data.materials.filter(x => materialState(x) === "已通过").length;
     const total = data.materials.length;
     const completion = total ? Math.round(done * 100 / total) : 0;
@@ -428,6 +493,39 @@ function profilePage() {
       p([data.college, data.major, data.className, profile.grade].filter(Boolean).join(" · ") || "学院/专业/班级未填"),
       make("div", { className: "progress-track" }, make("span", { style: "width:" + (stageNumber / 5 * 100) + "%" })),
       make("p", { className: "small", text: "培养流程 · 第 " + stageNumber + " / 5 阶段" }));
+    let deadlineTimer = null;
+    const deadlineEl = make("div", { className: "deadline-box" },
+      make("span", { className: "deadline-label", text: "即将截止" }),
+      make("p", { className: "deadline-text", text: "正在计算…" }));
+    const deadlineText = deadlineEl.querySelector(".deadline-text");
+    const deadlineFile = make("span", { className: "deadline-file" });
+    const deadlineRemaining = make("span", { className: "deadline-remaining" });
+    {
+      const parseDeadline = raw => {
+        const s = String(raw || "");
+        return s.includes(":") ? new Date(s.replace(" ", "T") + ":00+08:00") : new Date(s + "T23:59:59+08:00");
+      };
+      const upcoming = data.materials
+        .map(x => ({ ...x, dl: x.deadline ? parseDeadline(x.deadline) : null }))
+        .filter(x => x.dl && !Number.isNaN(+x.dl) && x.dl > new Date() && materialState(x) !== "已通过" && materialState(x) !== "退回修改")
+        .sort((a, b) => a.dl - b.dl);
+      if (upcoming.length) {
+        const next = upcoming[0];
+        deadlineFile.textContent = "待交材料：" + next.name;
+        deadlineText.replaceChildren(deadlineFile, deadlineRemaining);
+        const tick = () => {
+          if (deadlineTimer && !deadlineEl.isConnected) { clearInterval(deadlineTimer); return; }
+          const diff = next.dl - new Date();
+          if (diff <= 0) { deadlineRemaining.textContent = "已截止，请尽快提交"; clearInterval(deadlineTimer); return; }
+          const d = Math.floor(diff / 86400000), h = Math.floor(diff % 86400000 / 3600000), m = Math.floor(diff % 3600000 / 60000), s = Math.floor(diff % 60000 / 1000);
+          deadlineRemaining.replaceChildren("剩余 ", ...[d + " 天", h + " 小时", m + " 分", s + " 秒"].map(text => make("span", { className: "deadline-unit", text })));
+        };
+        tick();
+        deadlineTimer = setInterval(tick, 1000);
+      } else {
+        deadlineText.textContent = "暂时没有即将截止提交的文件。";
+      }
+    }
     const stats = make("div", { className: "metric-grid" },
       metric("当前阶段", data.stage?.name || "未开始", "培养进度", true),
       metric("当前节点", data.node?.name || "未设置", data.node?.duration_rule || "按计划推进"),
@@ -438,21 +536,23 @@ function profilePage() {
         make("td", { text: item.name }),
         make("td", { text: ({ A: "档案材料", B: "流程表", C: "会议记录" })[item.category] || item.category }),
         make("td", { text: ({ red: "个人填写", blue: "组织审批", black: "支部填写" })[item.fill_method] || item.fill_method }),
-        make("td", {}, make("span", { className: "badge " + (materialState(item) === "已通过" ? "done" : "missing"), text: materialState(item) }),
+        make("td", { className: "status-cell" },
+          make("div", { className: "status-head" }, make("span", { className: "badge " + (materialState(item) === "已通过" ? "done" : "missing"), text: materialState(item) })),
           item.checked_at ? make("div", { className: "small", text: "已提交 · " + displayTime(item.checked_at) }) : null,
           item.reviewed_at ? make("div", { className: "small", text: "已审阅 · " + displayTime(item.reviewed_at) }) : null,
           item.review_note ? make("div", { className: "small", text: "审阅说明：" + item.review_note }) : null,
-          item.checked_at ? make("details", { className: "submission-timeline" }, make("summary", { text: "提交历史" }),
-            make("ol", {}, (data.submissionHistory || []).filter(entry => entry.material_id === item.id).map(entry => make("li", {},
-              make("div", { className: "small", text: displayTime(entry.checked_at) + " · " + (entry.reviewed_at ? entry.review_status : "已提交") }),
-              entry.monitor_approved_at ? make("div", { className: "small", text: displayTime(entry.monitor_approved_at) + " · 班长初审通过" }) : null,
-              entry.review_note ? make("div", { className: "small", text: entry.review_note }) : null,
-              make("a", { className: "text-link small", href: "/api/checks/" + entry.id + "/file", text: "下载该版本" }))))) : null,
-          materialState(item) === "退回修改" ? make("a", { href: "#check", className: "text-link small", text: "修改后重新提交" }) : null)))));
+          make("div", { className: "status-actions" },
+            materialState(item) === "退回修改" ? make("a", { href: "#check", className: "btn secondary", text: "重新提交" }) : null,
+            item.review_status === "待审阅" && !item.viewed_at && item.check_id ? make("button", { type: "button", className: "btn secondary", text: "撤销重发", onclick: async event => {
+              const btn = event.currentTarget; btn.disabled = true; btn.textContent = "撤销中…";
+              try { await post("/api/checks/" + item.check_id + "/withdraw", {}); render(); }
+              catch (error) { btn.disabled = false; btn.textContent = "撤销重发"; alert(error.message); }
+            } }) : null,
+            item.checked_at && item.check_id ? make("a", { className: "text-link small", href: "/api/checks/" + item.check_id + "/file", text: "下载" }) : null))))));
     const materials = panel(make("div", { className: "panel-head" },
       make("h2", { text: "本阶段材料" }), make("span", { className: "small", text: "共 " + total + " 项" })),
       total ? tableWrap(table) : make("div", { className: "empty-state" }, make("strong", { text: "暂无材料" }), "此阶段尚未配置材料清单。"));
-    shell.replaceChildren(pageHead("STUDENT / OVERVIEW", "我的档案", "查看当前培养阶段、下一步节点和材料完成情况。"),
+    shell.replaceChildren(pageHead("STUDENT / OVERVIEW", profileTitle(), "在这里统一查看当前培养阶段、下一步节点和材料完成情况。", profileGreeting(deadlineEl)),
       summary, stats,
       ...(data.next ? [notice("下一步：" + data.next.name + "。请按计划准备相关材料。")] : []),
       materials);
@@ -460,8 +560,21 @@ function profilePage() {
   return shell;
 }
 
+const girlFrameCount = 8;
+let girlFramesReady = null;
+function preloadGirlFrames() {
+  if (!girlFramesReady) {
+    girlFramesReady = Promise.all(Array.from({ length: girlFrameCount }, (_, i) => {
+      const img = new Image();
+      img.decoding = "async";
+      img.src = "/girl/frame_" + i + ".webp";
+      return img.decode().catch(() => {});
+    })).then(() => true);
+  }
+  return girlFramesReady;
+}
 function mentorGirl() {
-  for (let i = 1; i <= 7; i++) { const img = new Image(); img.src = "/girl/frame_" + i + ".webp"; }
+  preloadGirlFrames();
   return make("img", { src: "/girl/frame_0.webp", alt: "", className: "mentor-girl-img", draggable: "false" });
 }
 
@@ -515,7 +628,7 @@ function rosterEditor(initial, alive, onDone) {
         const controls = [...rosterForm.elements].filter(control => control !== confirm && !control.disabled);
         controls.forEach(control => { control.disabled = true; });
         try {
-          const outcome = await post("/api/office/execute", { planId: preview.plan.id });
+          const outcome = await post("/api/office/execute", { planId: preview.plan.id, jitToken: preview.plan.jitToken });
           if (draft.isConnected && alive()) { rosterForm.remove(); onDone(outcome.message); }
         } catch (error) { confirm.disabled = false; feedback(rosterForm, error.message + "。可重新校验后再试。"); }
         finally { controls.forEach(control => { control.disabled = false; }); }
@@ -573,23 +686,43 @@ function mentorPage() {
     let selectedFiles = [];
     const fileInput = make("input", { type: "file", accept: ".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document", className: "mentor-file-input", "aria-label": "选择 Word DOCX 或 PDF 文件" });
     const attachment = make("div", { className: "mentor-attachment", hidden: "" });
-    const clearFile = () => { selectedFile = null; selectedFiles = []; fileInput.value = ""; attachment.hidden = true; attachment.replaceChildren(); textarea.required = true; };
+    let selectedFromZip = false;
+    const clearFile = () => { selectedFile = null; selectedFiles = []; selectedFromZip = false; fileInput.value = ""; attachment.hidden = true; attachment.replaceChildren(); textarea.required = true; };
     const attach = make("button", { type: "button", className: "mentor-attach", "aria-label": "上传 Word 或 PDF 文件", title: "上传 Word DOCX 或 PDF" }, icon("M8 12.5 14.5 6a3 3 0 0 1 4.2 4.2l-8.1 8.1a5 5 0 0 1-7.1-7.1l8.4-8.4", "附件"));
+    const acceptStaffFiles = (incoming, zipNote) => {
+      if (!incoming.length) { clearFile(); appendMessage({ role: "assistant", content: "没有可用的文件。支持 Word、PDF、图片及 Excel、CSV、TXT，也可直接上传包含这些文件的 ZIP 压缩包。" }); return; }
+      if (incoming.length > 30 || incoming.some(item => (!uploadType(item.name, true) && !/\.(csv|txt)$/i.test(item.name)) || item.size < 1 || item.size > maxFileBytes)) {
+        clearFile(); appendMessage({ role: "assistant", content: "每次最多 30 份文件，每份最大 10 MB。支持 Word、PDF、图片及 Excel、CSV、TXT 名单，或包含这些文件的 ZIP 压缩包。" }); return;
+      }
+      if (incoming.reduce((total, item) => total + item.size, 0) > maxBatchBytes) {
+        clearFile(); appendMessage({ role: "assistant", content: "这批附件超过 30 MB，请分批发送。" }); return;
+      }
+      if (new Set(incoming.map(item => item.name.toLowerCase())).size !== incoming.length) {
+        clearFile(); appendMessage({ role: "assistant", content: "有多份附件同名，请改名或分批发送。" }); return;
+      }
+      selectedFiles = incoming; textarea.required = false; attachment.hidden = false;
+      attachment.replaceChildren(make("span", { text: (zipNote ? zipNote + "：" : "") + incoming.map(item => item.name).join("、") }), button("移除", clearFile, "mentor-remove-attachment"));
+    };
     const acceptFile = file => {
       if (!file || (Array.isArray(file) && !file.length)) return;
       if (staffAgent) {
-        const incoming = (Array.isArray(file) ? file : [file]).map(item => normalizedAttachment(item, true));
-        if (incoming.length > 10 || incoming.some(item => (!uploadType(item.name, true) && !/\.(csv|txt)$/i.test(item.name)) || item.size < 1 || item.size > maxFileBytes)) {
-          clearFile(); appendMessage({ role: "assistant", content: "每次最多选择 10 份文件，每份最大 10 MB。支持 Word、PDF、图片及 Excel、CSV、TXT 名单。" }); return;
-        }
-        if (incoming.reduce((total, item) => total + item.size, 0) > maxBatchBytes) {
-          clearFile(); appendMessage({ role: "assistant", content: "这批附件超过 30 MB，请分批发送。" }); return;
-        }
-        if (new Set(incoming.map(item => item.name)).size !== incoming.length) {
-          clearFile(); appendMessage({ role: "assistant", content: "有多份附件同名，请改名或分批发送。" }); return;
-        }
-        selectedFiles = incoming; textarea.required = false; attachment.hidden = false;
-        attachment.replaceChildren(make("span", { text: incoming.map(item => item.name).join("、") }), button("移除", clearFile, "mentor-remove-attachment"));
+        const raw = Array.isArray(file) ? file : [file];
+        const zips = raw.filter(item => /\.zip$/i.test(item.name));
+        const rest = raw.filter(item => !/\.zip$/i.test(item.name)).map(item => normalizedAttachment(item, true));
+        if (!zips.length) { selectedFromZip = false; acceptStaffFiles(rest, null); return; }
+        attachment.hidden = false;
+        attachment.replaceChildren(make("span", { text: "正在解包压缩包…" }));
+        (async () => {
+          try {
+            const all = rest.slice(), skippedAll = [];
+            for (const item of zips) {
+              const { files, skipped } = await expandZip(item);
+              all.push(...files); skippedAll.push(...skipped);
+            }
+            selectedFromZip = true;
+            acceptStaffFiles(all, "已从压缩包解出 " + all.length + " 份文件" + (skippedAll.length ? "（跳过不支持：" + skippedAll.join("、") + "）" : ""));
+          } catch (error) { clearFile(); appendMessage({ role: "assistant", content: error.message }); }
+        })();
         return;
       }
       const allowed = /\.(docx|pdf)$/i;
@@ -620,6 +753,7 @@ function mentorPage() {
     };
     const reset = () => {
       mentorHistory = []; officeHistory = []; pendingOfficePlan = null; pendingOfficeButton = null; userReading = false;
+      mentorConversationId = randomHex(16);
       log.replaceChildren(empty);
       textarea.value = ""; clearFile(); textarea.focus();
     };
@@ -631,35 +765,57 @@ function mentorPage() {
       make("div", { className: "mentor-sidebar-bottom" }, make("span", { text: "当前会话" }), make("strong", { text: me?.name || me?.username || "学生" })));
     const menu = make("details", { className: "mentor-mobile-menu" }, make("summary", { "aria-label": "打开工作区菜单" }, icon("M4 7h16 M4 12h16 M4 17h16", "菜单")), make("nav", { "aria-label": "学生工作区" }, navLinks()));
     const girlImg = mentorGirl();
-    let girlTimers = [];
+    let girlRaf = 0;
     const setGirlFrame = n => { girlImg.src = "/girl/frame_" + n + ".webp"; };
-    const clearGirlTimers = () => { girlTimers.forEach(clearTimeout); girlTimers = []; };
+    const stopGirl = () => { if (girlRaf) cancelAnimationFrame(girlRaf); girlRaf = 0; };
+    // 用 requestAnimationFrame 驱动帧动画：与显示器刷新同步，比 setTimeout 更可靠，
+    // 且帧图在 mentorGirl() 已预解码，低配机上不会因解码卡顿而看不到动画。
     const playGirlTyping = () => {
-      clearGirlTimers();
-      let i = 1;
-      const introDurs = [320, 300, 260, 240];
-      const step = () => {
-        if (i <= 4) { setGirlFrame(i); girlTimers.push(setTimeout(step, introDurs[i - 1])); i++; }
-        else { let t = 0; const loop = () => { setGirlFrame(5 + (t % 3)); t++; girlTimers.push(setTimeout(loop, 240)); }; loop(); }
+      stopGirl();
+      const start = performance.now();
+      const intro = [320, 300, 260, 240];
+      const loopDur = 240;
+      const step = now => {
+        const elapsed = now - start;
+        let frame;
+        let introTotal = 0;
+        for (let i = 0; i < 4; i++) { introTotal += intro[i]; if (elapsed < introTotal) { frame = 1 + i; break; } }
+        if (frame === undefined) frame = 5 + Math.floor(((elapsed - introTotal) / loopDur) % 3);
+        setGirlFrame(frame);
+        girlRaf = requestAnimationFrame(step);
       };
-      step();
+      girlRaf = requestAnimationFrame(step);
     };
     const playGirlBack = () => {
-      clearGirlTimers();
-      [4, 3, 2, 1, 0].forEach((n, idx) => { girlTimers.push(setTimeout(() => setGirlFrame(n), idx * 180)); });
+      stopGirl();
+      const start = performance.now();
+      const backDur = 180;
+      const step = now => {
+        const idx = Math.min(4, Math.floor((now - start) / backDur));
+        setGirlFrame(4 - idx);
+        if (idx < 4) girlRaf = requestAnimationFrame(step);
+      };
+      girlRaf = requestAnimationFrame(step);
     };
+    const collapseHero = make("button", { type: "button", className: "mentor-hero-close", "aria-label": "收起顶部", title: "收起顶部", text: "×" });
+    const expandHero = make("button", { type: "button", className: "mentor-hero-restore", "aria-label": "展开顶部", title: "展开顶部", text: "＋", hidden: "" });
+    const setHeroCollapsed = collapsed => { shell.classList.toggle("hero-collapsed", collapsed); expandHero.hidden = !collapsed; };
+    collapseHero.onclick = () => setHeroCollapsed(true);
+    expandHero.onclick = () => setHeroCollapsed(false);
     const hero = make("div", { className: "mentor-hero" },
       make("div", { className: "mentor-girl", "aria-hidden": "true" }, girlImg),
       make("div", { className: "mentor-titlebox" },
+        collapseHero,
         make("strong", { text: mentorTitle() }),
         make("span", { text: me ? "党员发展计划辅助系统" : "访客模式 · 登录后可知你的档案" })));
-    const header = make("header", { className: "mentor-topbar" }, make("div", { className: "mentor-topbar-left" }, menu, newChat()));
+    const header = make("header", { className: "mentor-topbar" },
+      make("div", { className: "mentor-topbar-left" }, menu, newChat(), expandHero));
     if (staffAgent) {
       fileInput.multiple = true;
       fileInput.accept = officeAccept;
       fileInput.setAttribute("aria-label", "选择办公任务文件");
       attach.setAttribute("aria-label", "选择办公任务文件");
-      attach.title = "选择最多 10 份文件";
+      attach.title = "选择最多 30 份文件，或包含文件的 ZIP 压缩包";
     }
     const content = make("div", { className: "mentor-content" }, log, form);
     shell.replaceChildren(aside, make("section", { className: "mentor-main", "aria-label": "成长导师" }, hero, header, content));
@@ -702,9 +858,10 @@ function mentorPage() {
         }
         const result = structuredRoster?.length
           ? { ...await post("/api/office/roster-preview", { rows: structuredRoster }), answer: "请逐行核对名单，选择班级后校验。" }
-          : await post("/api/office/plan", { question, documentText: documentText.slice(0, 25000), files: files.map(file => ({ name: file.name })), history: officeHistory.slice(-6) });
+          : await post("/api/office/plan", { question, documentText: documentText.slice(0, 25000), files: files.map(file => ({ name: file.name })), history: officeHistory.slice(-12) });
         if (!alive()) return;
         officeHistory.push({ role: "user", content: question }, { role: "assistant", content: result.answer });
+        if (officeHistory.length > 24) officeHistory = officeHistory.slice(-24);
         loading.remove();
         const row = appendMessage({ role: "assistant", content: result.answer + (result.plan ? "\n\n待确认操作\n" + result.plan.preview : "") });
         if (result.roster) row.querySelector(".mentor-bubble").append(rosterEditor(result.roster, alive, message => {
@@ -729,18 +886,18 @@ function mentorPage() {
               if (result.plan.type === "reset_password") {
                 temporaryPassword = randomHex(12);
                 const newSalt = randomHex(16), newVerifier = await derive(temporaryPassword, newSalt);
-                outcome = await post("/api/office/execute", { planId: result.plan.id, newSalt, newVerifier });
+                outcome = await post("/api/office/execute", { planId: result.plan.id, jitToken: result.plan.jitToken, newSalt, newVerifier });
               } else if (result.plan.type === "upload_forms" || result.plan.type === "upload_student_files") {
                 const body = new FormData();
                 body.append("planId", result.plan.id);
+                body.append("jitToken", result.plan.jitToken);
                 plannedFiles.forEach(file => body.append("file", file, file.name));
                 outcome = await uploadWithProgress("/api/office/execute", body, progress.querySelector(".mentor-bubble") || progress);
-              } else outcome = await post("/api/office/execute", { planId: result.plan.id });
+              } else outcome = await post("/api/office/execute", { planId: result.plan.id, jitToken: result.plan.jitToken });
               if (!alive()) return;
               progress.remove();
               pendingOfficePlan = null;
               pendingOfficeButton = null;
-              officeHistory = [];
               clearFile();
               focusReplyTop(appendMessage({ role: "assistant", content: outcome.message + (temporaryPassword ? "\n\n本次临时密码（仅显示在此处）： " + temporaryPassword : "") }));
             } catch (error) {
@@ -760,35 +917,50 @@ function mentorPage() {
       event.preventDefault();
       const question = form.elements.question.value.trim();
       const file = selectedFile;
-      if (staffAgent) { await handleOfficeSubmit(question, selectedFiles); return; }
+      if (staffAgent) {
+        const zipHint = selectedFromZip && !question ? "请把这批文件按培养阶段上传到资料下载专区" : question;
+        await handleOfficeSubmit(zipHint, selectedFiles); return;
+      }
       if (!file && question.length < 2) { textarea.setCustomValidity("请输入至少两个字的问题"); textarea.reportValidity(); textarea.setCustomValidity(""); return; }
       const release = busy(form);
       attach.disabled = true;
       const history = mentorHistory.slice(-6);
       userReading = false;
       if (log.contains(empty)) empty.remove();
-      const displayQuestion = file ? "检查文件：" + file.name + (question ? "\n" + question : "") : question;
+      const submitIntent = /(提交|上传|交|归档|递交)/.test(question) && /(材料|文件|申请书|附件|思想汇报|自传|表)/.test(question);
+      const displayQuestion = file ? (submitIntent ? "提交文件" : "检查文件") + "：" + file.name + (question ? "\n" + question : "") : question;
       appendMessage({ role: "user", content: displayQuestion });
-      const loading = appendMessage({ role: "assistant", content: file ? "正在读取文档文字…" : status.enabled ? "正在思考…" : "正在检索…" });
+      const loading = appendMessage({ role: "assistant", content: file ? (submitIntent ? "正在准备提交…" : "正在读取文档文字…") : status.enabled ? "正在思考…" : "正在检索…" });
       playGirlTyping();
       textarea.value = ""; textarea.blur(); resize(); scrollEnd();
       try {
         let result;
         if (file) {
-          const text = await extractReviewText(file);
-          loading.querySelector(".mentor-message").textContent = "正在识别表单并核对填写规范…";
-          result = await post("/api/mentor/review", { filename: file.name, text });
-          clearFile();
-        } else result = await post(status.enabled ? "/api/mentor/chat" : "/api/mentor/retrieve", { question, history });
+          if (submitIntent && status.enabled) {
+            const stageForm = new FormData();
+            stageForm.append("file", file, file.name);
+            const staged = await uploadWithProgress("/api/agent/upload", stageForm, loading.querySelector(".mentor-bubble") || loading);
+            result = await post("/api/agent/plan", { question, files: [{ name: file.name, ref: staged.file_ref }], conversationId: mentorConversationId ||= randomHex(16) });
+            clearFile();
+          } else {
+            const text = await extractReviewText(file);
+            loading.querySelector(".mentor-message").textContent = "正在识别表单并核对填写规范…";
+            result = await post("/api/mentor/review", { filename: file.name, text });
+            clearFile();
+          }
+        } else {
+          result = await post(status.enabled ? "/api/agent/plan" : "/api/mentor/retrieve", status.enabled ? { question, history, conversationId: mentorConversationId ||= randomHex(16) } : { question, history });
+          if (status.enabled && result.deferred) result = await post("/api/mentor/chat", { question, history });
+        }
         if (!alive()) return;
         loading.remove();
         if (status.enabled || file) {
-          mentorHistory.push({ role: "user", content: displayQuestion }, { role: "assistant", content: result.answer, route: result.route, sources: result.sources || [] });
+          mentorHistory.push({ role: "user", content: displayQuestion }, { role: "assistant", content: result.answer || "", route: result.route, sources: result.sources || [] });
           const row = appendMessage({ role: "assistant", content: "", sources: result.sources });
           const msg = row.querySelector(".mentor-message");
           focusReplyTop(row);
           // 先按 markdown 渲染成最终排版，再逐字回填渲染后的文本，避免用户看到原始 markdown 符号
-          msg.innerHTML = renderMarkdown(result.answer);
+          msg.innerHTML = renderMarkdown(result.answer || "");
           const pending = [];
           const walker = document.createTreeWalker(msg, NodeFilter.SHOW_TEXT);
           let node;
@@ -806,6 +978,29 @@ function mentorPage() {
             }
           }
           focusReplyTop(row);
+          if (result.action?.type === "navigate") {
+            row.querySelector(".mentor-bubble").append(button("打开「" + agentRouteLabel(result.action.route) + "」", () => { closeMentor(); location.hash = result.action.route; }, "btn"));
+          }
+          if (result.plan) {
+            const confirm = button("确认执行", async () => {
+              if (confirm.disabled) return;
+              confirm.disabled = true;
+              const progress = appendMessage({ role: "assistant", content: "正在执行已确认的操作…" });
+              const releaseExecution = busy(form);
+              attach.disabled = true; playGirlTyping(); scrollEnd();
+              try {
+                const outcome = await post("/api/agent/execute", { planId: result.plan.id, payloadHash: result.plan.payloadHash });
+                if (!alive()) return;
+                progress.remove();
+                focusReplyTop(appendMessage({ role: "assistant", content: outcome.message }));
+              } catch (error) {
+                progress.remove();
+                confirm.disabled = false;
+                focusReplyTop(appendMessage({ role: "assistant", content: "执行未完成：" + error.message + "。请核对后重试。" }));
+              } finally { playGirlBack(); releaseExecution(); attach.disabled = false; }
+            }, "btn");
+            row.querySelector(".mentor-bubble").append(make("div", { className: "mentor-plan-preview" }, p(result.plan.preview)), confirm);
+          }
         } else {
           mentorHistory.push({ role: "user", content: displayQuestion });
           focusReplyTop(appendMessage({ role: "assistant", content: result.sources?.length ? "找到以下相关资料：" : "目前没有找到相关资料，请换个更具体的问法。", sources: result.sources }));
@@ -845,7 +1040,7 @@ function resetMentorPanel() {
 }
 
 function notificationsPage() {
-  const shell = make("div", { className: "view view-notifications" }, pageHead("STUDENT / INBOX", "通知中心", "重要节点和材料提醒会集中显示在这里。"), notice("正在读取通知…"));
+  const shell = make("div", { className: "view view-notifications" }, pageHead("STUDENT / INBOX", "通知中心", "重要节点和材料提醒会集中显示在这里。"), skeleton());
   (async () => { try {
     const data = await api("/api/notifications");
     shell.replaceChildren(pageHead("STUDENT / INBOX", "通知中心", "重要节点和材料提醒会集中显示在这里。"));
@@ -856,6 +1051,8 @@ function notificationsPage() {
         read.disabled = true;
         try {
           await post("/api/notifications/" + item.id + "/read", {});
+          unreadNotifications = Math.max(0, unreadNotifications - 1);
+          nav();
           row.classList.add("read");
           read.remove();
         } catch (error) {
@@ -865,7 +1062,7 @@ function notificationsPage() {
       });
       const row = make("div", { className: "notice-item" + (item.is_read ? " read" : "") },
         make("span", { className: "notice-dot" }),
-        make("div", {}, make("h2", { text: item.title }), p(item.content), make("time", { text: item.created_at }), make("p", { className: "small", role: "status" })),
+        make("div", {}, make("h2", { text: item.title }), p(item.content), make("time", { text: displayTime(item.created_at) }), make("p", { className: "small", role: "status" })),
         item.is_read ? null : read);
       shell.append(panel(row));
     }
@@ -1063,7 +1260,7 @@ function editScan(initialCanvas, onSelect) {
 }
 
 function checkPage() {
-  const shell = make("div", { className: "view view-check" }, pageHead("STUDENT / SUBMISSION", "材料提交", "上传 Word、PDF 或图片，提交后可在材料记录中查看。"), notice("正在读取材料列表…"));
+  const shell = make("div", { className: "view view-check" }, pageHead("STUDENT / SUBMISSION", "材料提交", "上传 Word、PDF 或图片，提交后可在材料记录中查看。"), skeleton());
   (async () => { try {
     const data = await api("/api/materials");
     const materialChoices = data.materials.map(x => [x.id, x.name]);
@@ -1115,8 +1312,52 @@ function checkPage() {
     }
     scanInput.addEventListener("change", chooseScan);
     gallery.addEventListener("change", chooseScan);
-    const output = panel(make("div", { className: "panel-head" }, make("h2", { text: "质检结果" })),
-      make("div", { className: "empty-state" }, make("strong", { text: "等待检查" }), "选择文件后，提交结果将在这里显示。"));
+    const outputBody = make("div", { className: "check-subpanel" },
+      make("div", { className: "empty-state" }, make("strong", { text: "等待检查" }), "选择文件后，质检结果将在这里显示。"));
+    const submissionsBody = make("div", { className: "check-subpanel" },
+      make("div", { className: "empty-state" }, make("strong", { text: "暂无已提交文件" }), "提交后会在下方按阶段列出。"));
+    const combined = panel(
+      make("div", { className: "panel-head" }, make("h2", { text: "提交结果" }), make("span", { className: "small", text: "上方为质检结果，下方为已提交文件（按阶段）" })),
+      make("h3", { className: "check-section-title", text: "质检结果" }), outputBody,
+      make("h3", { className: "check-section-title", text: "已提交文件" }), submissionsBody);
+    const checkStatus = item => item.review_status === "已通过" ? "已通过" :
+      item.review_status === "退回修改" ? "退回修改" :
+      item.review_status === "待审阅" ? (item.monitor_approved ? "待辅导员审阅" : "待学生管理员初审") : "已提交";
+    const stageOrder = ["application", "activist", "development-target", "probationary-acceptance", "probationary-regularization"];
+    const submissionRow = item => make("tr", {},
+      make("td", { text: item.material_name }),
+      make("td", {}, make("a", { className: "text-link small", href: "/api/checks/" + item.id + "/file", text: item.filename })),
+      make("td", { text: displayTime(item.checked_at) }),
+      make("td", {}, make("span", { className: "badge " + (item.review_status === "已通过" ? "done" : "missing"), text: checkStatus(item) })),
+      make("td", {},
+        item.review_status === "待审阅" && !item.viewed_at ? make("button", { type: "button", className: "text-link small", text: "撤销重发", onclick: async event => {
+          const btn = event.currentTarget; btn.disabled = true; btn.textContent = "撤销中…";
+          try { await post("/api/checks/" + item.id + "/withdraw", {}); await renderSubmitted(); }
+          catch (error) { btn.disabled = false; btn.textContent = "撤销重发"; alert(error.message); }
+        } }) : null));
+    const renderSubmitted = async () => {
+      try {
+        const checks = (await api("/api/checks")).checks || [];
+        if (!checks.length) {
+          submissionsBody.replaceChildren(make("div", { className: "empty-state" }, make("strong", { text: "暂无已提交文件" }), "提交后会在下方按阶段列出。"));
+          return;
+        }
+        const grouped = new Map();
+        for (const item of checks) {
+          const key = item.stage_slug || "其他";
+          if (!grouped.has(key)) grouped.set(key, []);
+          grouped.get(key).push(item);
+        }
+        const sections = [...grouped.entries()]
+          .sort((a, b) => stageOrder.indexOf(a[0]) - stageOrder.indexOf(b[0]))
+          .map(([slug, items]) => [
+            make("h4", { className: "check-stage", text: items[0].stage_name || slug }),
+            tableWrap(make("table", { className: "data" }, make("thead", {}, make("tr", {}, ["材料", "文件", "提交时间", "状态", "操作"].map(x => make("th", { text: x })))), make("tbody", {}, ...items.map(submissionRow))))
+          ]);
+        submissionsBody.replaceChildren(...sections.flat());
+      } catch { submissionsBody.replaceChildren(make("div", { className: "empty-state" }, "无法读取提交记录")); }
+    };
+    renderSubmitted();
     form.addEventListener("submit", async event => {
       event.preventDefault();
       const release = busy(form);
@@ -1136,12 +1377,12 @@ function checkPage() {
         input.value = "";
         fileStatus.textContent = "";
         scannedFile = null;
-        output.replaceChildren(make("div", { className: "panel-head" }, make("h2", { text: inspected ? "质检结果" : "提交结果" }), inspected ? make("span", { className: "small", text: results.length + " 项结果" }) : null),
-          inspected ? make("div", { className: "results-list" },
+        outputBody.replaceChildren(inspected ? make("div", { className: "results-list" },
             results.length ? results.map(r => make("div", { className: "result-row" }, make("strong", { text: r.message }), p(r.suggestion))) :
               [make("div", { className: "result-row" }, make("strong", { text: "未发现格式问题" }), p("已完成当前规则检查。"))]) : null,
           notice(inspected ? "文件已提交，DOCX 格式检查已完成。" : "文件已提交，等待人工审阅。", "success"),
           make("a", { className: "text-link", href: "/api/checks/" + saved.id + "/file", text: "下载已保存的材料 →" }));
+        renderSubmitted();
       } catch (error) {
         progress.textContent = "";
         if (uploadKey) submit.textContent = "重试提交";
@@ -1149,9 +1390,9 @@ function checkPage() {
       }
       finally { release(); }
     });
-    shell.replaceChildren(pageHead("STUDENT / SUBMISSION", "材料提交", "上传 Word、PDF 或图片，提交后可在材料记录中查看。"),
+    shell.replaceChildren(pageHead("STUDENT / SUBMISSION", "材料提交", "上传 Word、PDF 或图片，提交后可在下方查看和撤销。"),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "上传并提交材料" })),
-        p("DOCX 会检查标题、正文和落款格式。旧版 Word、PDF 和图片提交后由人工审阅。"), form), output);
+        p("DOCX 会检查标题、正文和落款格式。旧版 Word、PDF 和图片提交后由人工审阅。"), form), combined);
   } catch (error) { shell.replaceChildren(pageHead("STUDENT / SUBMISSION", "材料提交"), notice(error.message, "error")); } })();
   return shell;
 }
@@ -1218,7 +1459,7 @@ function checksPage(monitor = false) {
   const rows = make("tbody");
   const selected = new Set();
   const count = make("span", { className: "bulk-count", text: "已选 0 份" });
-  const canReview = x => x.review_status === "待审阅" && (monitor ? !x.monitor_approved : !!x.monitor_approved);
+  const canReview = x => x.review_status === "待审阅" && (monitor ? !x.monitor_approved : true);
   const note = field("退回修改说明", "reviewNote", "text", false);
   const noteInput = note.querySelector("input");
   const selectAll = make("input", { type: "checkbox", "aria-label": "选择本页待审阅材料", onchange: event => {
@@ -1228,7 +1469,7 @@ function checksPage(monitor = false) {
     make("th", { className: "bulk-select" }, selectAll),
     ["学生 / 班级", "材料", "文件", "审阅状态", "提交时间"].map(text => make("th", { text })))), rows);
   const classField = select("班级", "classId", [["", "全部班级"]]);
-  const statusField = select("状态", "status", [["", "全部状态"], ["staff", "待辅导员审阅"], ["monitor", "待班长初审"], ["approved", "已通过"], ["returned", "退回修改"]]);
+  const statusField = select("状态", "status", [["", "全部状态"], ["staff", "待辅导员审阅"], ["monitor", "待学生管理员初审"], ["approved", "已通过"], ["returned", "退回修改"]]);
   const since = field("提交日期起", "since", "date", false);
   const filters = make("form", { className: "bulk-tools review-filters" }, monitor ? null : classField, statusField, since,
     make("button", { type: "submit", className: "secondary", text: "筛选" }));
@@ -1273,7 +1514,7 @@ function checksPage(monitor = false) {
       selectAll.checked = false;
       count.textContent = "已选 0 份";
       rows.replaceChildren(...data.checks.map(x => {
-        const status = x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待班长初审" : x.review_status;
+        const status = x.review_status === "待审阅" ? x.monitor_approved ? "待辅导员审阅" : "待学生管理员初审" : x.review_status;
         return make("tr", {},
           make("td", { className: "bulk-select" }, canReview(x) ? make("input", { type: "checkbox", "aria-label": "选择 " + (x.student_name || x.student_id) + " 的 " + x.material_name, onchange: event => {
             if (event.target.checked) selected.add(x.id); else selected.delete(x.id);
@@ -1301,7 +1542,7 @@ function checksPage(monitor = false) {
 }
 
 function formsPage() {
-  const shell = make("div", { className: "view view-forms" }, pageHead("LIBRARY / DOWNLOADS", "资料下载", "按培养阶段查找和下载所需表格。"), notice("正在读取表格…"));
+  const shell = make("div", { className: "view view-forms" }, pageHead("LIBRARY / DOWNLOADS", "资料下载", "按培养阶段查找和下载所需表格。"), skeleton());
   (async () => { try {
     const data = await api("/api/forms");
     const upload = isStaffUser() ? make("form", { className: "form-grid form-upload" },
@@ -1357,19 +1598,85 @@ function formsPage() {
 }
 const isStaffUser = () => me?.role === "admin" || me?.role === "counselor";
 
+function hierarchyPage() {
+  const shell = make("div", { className: "view view-hierarchy" }, pageHead("STAFF / ORG", "管理体系", "查看各专业、班级与学生的培养状态，学生管理员置顶。"), skeleton());
+  (async () => { try {
+    const data = await api("/api/admin/hierarchy");
+    const badge = (label, cls) => make("span", { className: "badge " + cls, text: label });
+    const tree = make("div", { className: "hierarchy" });
+    for (const grade of data.grades) {
+      const majorTotal = grade.majors.reduce((n, m) => n + m.classes.length, 0);
+      const studentTotal = grade.majors.reduce((n, m) => n + m.classes.reduce((n2, c) => n2 + c.students.length, 0), 0);
+      const gradeNode = make("details", { className: "hierarchy-grade", open: "" },
+        make("summary", {},
+          make("strong", { text: grade.name }),
+          make("span", { className: "small muted", text: (grade.college_name ? grade.college_name + " · " : "") + grade.majors.length + " 个专业 · " + majorTotal + " 个班 · " + studentTotal + " 人" })));
+      for (const major of grade.majors) {
+        const classTotal = major.classes.reduce((n, c) => n + c.students.length, 0);
+        const majorNode = make("details", { className: "hierarchy-major" },
+          make("summary", {},
+            make("span", { className: "hierarchy-major-name", text: major.name }),
+            make("span", { className: "small muted", text: major.classes.length + " 个班 · " + classTotal + " 人" })));
+        for (const cls of major.classes) {
+          const classNode = make("details", { className: "hierarchy-class" },
+            make("summary", {},
+              make("span", { className: "hierarchy-class-name", text: cls.name }),
+              make("span", { className: "small muted", text: cls.students.length + " 人" }),
+              cls.monitor ? make("span", { className: "small", text: "学生管理员：" + cls.monitor.name }) : make("span", { className: "small muted", text: "未设学生管理员" })));
+          const list = make("ul", { className: "hierarchy-students" });
+          for (const s of cls.students) {
+            const tag = s.is_monitor ? badge("学生管理员", "monitor") : s.is_archived ? badge("已归档党员", "done") : badge("发展中", "developing");
+            list.append(make("li", { className: (s.is_monitor ? "is-monitor" : "") + (s.is_archived ? " is-archived" : "") },
+              make("span", { className: "hierarchy-student-name", text: s.name }),
+              make("span", { className: "small muted", text: s.student_no + (s.stage_name ? " · " + s.stage_name : "") }), tag));
+          }
+          if (!cls.students.length) list.append(make("li", { className: "small muted", text: "暂无学生" }));
+          classNode.append(list);
+          majorNode.append(classNode);
+        }
+        gradeNode.append(majorNode);
+      }
+      tree.append(gradeNode);
+    }
+    if (!data.grades.length) tree.append(make("div", { className: "empty-state" }, "暂无可管理的年级。"));
+    shell.replaceChildren(pageHead("STAFF / ORG", "管理体系", "查看各专业、班级与学生的培养状态，学生管理员置顶。"), tree);
+  } catch (error) { shell.replaceChildren(pageHead("STAFF / ORG", "管理体系"), notice(error.message, "error")); } })();
+  return shell;
+}
+
+function skeleton() {
+  return make("div", { "aria-hidden": "true" },
+    make("div", { className: "skeleton skeleton-block", style: "height:120px" }),
+    make("div", { className: "skeleton skeleton-block" }),
+    make("div", { className: "skeleton skeleton-block", style: "height:160px" }));
+}
+
+function adminSkeleton() {
+  return make("div", { "aria-hidden": "true" },
+    make("div", { className: "skeleton-stats" }, [1, 2, 3, 4].map(() => make("div", { className: "skeleton skeleton-card" }))),
+    make("div", { className: "skeleton skeleton-block" }),
+    make("div", { className: "skeleton skeleton-block" }));
+}
+
 function adminPage() {
-  const adminTitle = me.role === "admin" ? "管理员控制台" : "辅导员控制台";
+  const adminTitle = make("h1", { className: "page-title" },
+    make("span", { text: me.role === "admin" ? "管理员工作台" : "辅导员工作台" }));
+  const adminGreeting = () => greetingClock(dayPart() + "好，您辛苦了！");
   const adminCode = me.role === "admin" ? "ADMIN / CONSOLE" : "COUNSELOR / CONSOLE";
-  const shell = make("div", { className: "view view-admin" }, pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"), notice("正在读取数据…"));
+  const shell = make("div", { className: "view view-admin" }, pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。", adminGreeting()), adminSkeleton());
   (async () => { try {
     const filters = new URLSearchParams(location.search);
     const data = await api("/api/admin/dashboard?" + filters);
     const collegeChoices = data.colleges.map(x => [x.id, x.name]);
-    const majorLabel = id => (data.majors.find(m => m.id === id)?.name || "") + " · " + (data.colleges.find(c => c.id === (data.majors.find(m => m.id === id)?.college_id))?.name || "");
+    const gradeChoices = data.grades.map(x => [x.id, x.name]);
+    const gradeName = id => (data.grades.find(g => g.id === id)?.name || "");
+    const majorLabel = id => (data.majors.find(m => m.id === id)?.name || "") + " · " + gradeName(data.majors.find(m => m.id === id)?.grade_id);
     const majorChoices = data.majors.map(x => [x.id, majorLabel(x.id)]);
-    const visibleClasses = me.role === "admin" ? data.classes : data.classes.filter(c => c.major_id === me.major_id);
+    const gradeMajorIds = new Set(me.role === "admin" ? data.majors.map(m => m.id) : data.majors.filter(m => m.grade_id === me.grade_id).map(m => m.id));
+    const visibleClasses = me.role === "admin" ? data.classes : data.classes.filter(c => gradeMajorIds.has(c.major_id));
     const classChoices = visibleClasses.map(x => [x.id, (data.majors.find(m => m.id === x.major_id)?.name || "") + " · " + x.name]);
     const needCollege = me.role === "admin" && collegeChoices.length === 0;
+    const needGrade = me.role === "admin" && gradeChoices.length === 0;
     const needMajor = me.role === "admin" && majorChoices.length === 0;
     const searchForm = make("form", { className: "inline-form" },
       field("检索学生（姓名或学号）", "q", "text", false, new URLSearchParams(location.search).get("q") || ""),
@@ -1382,7 +1689,7 @@ function adminPage() {
       history.replaceState(null, "", url); render();
     });
     const inviteForm = make("form", { className: "inline-form" },
-      select("专业", "majorId", majorChoices, majorChoices[0]?.[0]),
+      select("年级", "gradeId", gradeChoices, gradeChoices[0]?.[0]),
       select("角色", "role", [["counselor", "辅导员"]]),
       field("邀请数量（1–50）", "count", "number", true, "1"),
       make("button", { className: "btn", type: "submit", text: "生成邀请码" }));
@@ -1407,8 +1714,16 @@ function adminPage() {
       try { await post("/api/admin/departments", formData(collegeForm)); render(); }
       catch (error) { feedback(collegeForm, error.message); }
     });
-    const majorForm = make("form", { className: "inline-form" },
+    const gradeForm = make("form", { className: "inline-form" },
       select("所属学院", "collegeId", collegeChoices, collegeChoices[0]?.[0]),
+      field("新年级名称（如 23级）", "name"), make("button", { className: "btn", type: "submit", text: "添加年级" }));
+    gradeForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      try { await post("/api/admin/grades", formData(gradeForm)); render(); }
+      catch (error) { feedback(gradeForm, error.message); }
+    });
+    const majorForm = make("form", { className: "inline-form" },
+      select("所属年级", "gradeId", gradeChoices, gradeChoices[0]?.[0]),
       field("新专业名称", "name"), make("button", { className: "btn", type: "submit", text: "添加专业" }));
     majorForm.addEventListener("submit", async event => {
       event.preventDefault();
@@ -1416,7 +1731,7 @@ function adminPage() {
       catch (error) { feedback(majorForm, error.message); }
     });
     const classForm = make("form", { className: "inline-form" },
-      select("所属专业", "majorId", me.role === "admin" ? majorChoices : [[me.major_id, majorLabel(me.major_id)]], me.role === "admin" ? majorChoices[0]?.[0] : me.major_id),
+      select("所属专业", "majorId", me.role === "admin" ? majorChoices : data.majors.filter(m => m.grade_id === me.grade_id).map(m => [m.id, majorLabel(m.id)]), me.role === "admin" ? majorChoices[0]?.[0] : (data.majors.filter(m => m.grade_id === me.grade_id)[0]?.id)),
       field("新班级名称", "name"), make("button", { className: "btn", type: "submit", text: "添加班级" }));
     classForm.addEventListener("submit", async event => {
       event.preventDefault();
@@ -1435,9 +1750,9 @@ function adminPage() {
       catch (error) { feedback(addStudentForm, error.message); }
       finally { release(); }
     });
-    const addCounselorForm = (me.role === "admin" && majorChoices.length) ? make("form", { className: "inline-form" },
+    const addCounselorForm = (me.role === "admin" && gradeChoices.length) ? make("form", { className: "inline-form" },
       field("姓名", "name"), field("用户名", "username", "text"),
-      select("专业", "majorId", majorChoices, majorChoices[0]?.[0]),
+      select("年级", "gradeId", gradeChoices, gradeChoices[0]?.[0]),
       make("button", { className: "btn", type: "submit", text: "添加辅导员" })) : null;
     if (addCounselorForm) addCounselorForm.addEventListener("submit", async event => {
       event.preventDefault();
@@ -1450,7 +1765,7 @@ function adminPage() {
     const studentCount = make("span", { className: "bulk-count", text: "已选 0 人" });
     const setMonitor = async (student, cls) => {
       if (!cls) return feedback(shell, "请先将学生分配到班级");
-      if (!await actionDialog("设置班长", "将 " + student.name + " 设为「" + cls.name + "」的班长。")) return;
+      if (!await actionDialog("设置学生管理员", "将 " + student.name + " 设为「" + cls.name + "」的学生管理员。")) return;
       try { await post("/api/admin/classes/monitor", { classId: cls.id, studentId: student.id }); render(); }
       catch (error) { feedback(shell, error.message); }
     };
@@ -1464,21 +1779,21 @@ function adminPage() {
           studentCount.textContent = "已选 " + selectedStudents.size + " 人";
         } })),
         make("td", { text: student.student_no }), make("td", { text: student.name }),
-        make("td", { text: (student.major_name ? student.major_name + " · " : "") + (student.class_name || "未分班") }),
+        make("td", { text: (student.grade_name ? student.grade_name + " · " : "") + (student.major_name ? student.major_name + " · " : "") + (student.class_name || "未分班") }),
         make("td", { text: data.nodes.find(x => x.slug === student.current_node_slug)?.name || "" }),
         make("td", {}, button("管理", () => showStudent(student, data), "secondary"),
-          button("设班长", () => setMonitor(student, data.classes.find(c => c.id === student.class_id)), "secondary"),
+          button("设学生管理员", () => setMonitor(student, data.classes.find(c => c.id === student.class_id)), "secondary"),
           button("移入回收站", async () => {
             if (!await actionDialog("移入回收站", student.name + " 将无法登录。可在回收站恢复账号。", "移入回收站")) return;
             try { await post("/api/admin/students/bulk-delete", { studentIds: [student.id] }); render(); }
             catch (error) { feedback(shell, error.message); }
           }, "secondary"))))));
     const counselorsTable = make("table", { className: "data" },
-      make("thead", {}, make("tr", {}, ["姓名", "用户名", "专业", "操作"].map(x => make("th", { text: x })))),
+      make("thead", {}, make("tr", {}, ["姓名", "用户名", "年级", "操作"].map(x => make("th", { text: x })))),
       make("tbody", {}, data.counselors.map(counselor => make("tr", {},
         make("td", { text: counselor.name || "—" }),
         make("td", { text: counselor.username }),
-        make("td", { text: counselor.major_name || "未分配" }),
+        make("td", { text: counselor.grade_name || "未分配" }),
         make("td", {}, button("移入回收站", async () => {
           if (!await actionDialog("移入回收站", (counselor.name || counselor.username) + " 将无法登录。可在回收站恢复账号。", "移入回收站")) return;
           try { await post("/api/admin/counselors/bulk-delete", { usernames: [counselor.username] }); render(); }
@@ -1496,39 +1811,82 @@ function adminPage() {
     };
     const bulkTools = make("div", { className: "bulk-tools" }, studentCount,
       button("批量推进下一阶段", () => bulkAction("advance")),
-      button("批量移入回收站", () => bulkAction("delete"), "secondary"));
+      button("批量移入回收站", () => bulkAction("delete"), "secondary danger"));
     const metrics = make("div", { className: "metric-grid" },
       metric("学生档案", String(data.students.length), "当前可管理的学生"),
       ...(me.role === "admin" ? [metric("辅导员", String(data.counselors.length), "已注册辅导员")] : []),
-      metric("班级", String(visibleClasses.length), me.role === "admin" ? "全部班级" : "本专业班级"),
-      ...(me.role === "admin" ? [metric("专业", String(data.majors.length), "已配置专业"), metric("学院", String(data.colleges.length), "已配置学院")] : []),
+      metric("班级", String(visibleClasses.length), me.role === "admin" ? "全部班级" : "本年级班级"),
+      ...(me.role === "admin" ? [metric("专业", String(data.majors.length), "已配置专业"), metric("年级", String(data.grades.length), "已配置年级"), metric("学院", String(data.colleges.length), "已配置学院")] : []),
       ...(me.role === "admin" ? [metric("有效邀请", String(data.invites.filter(x => x.role === "counselor" && !x.used_by && new Date(x.expires_at) > new Date()).length), "未使用的辅导员邀请码", true)] : []));
-    shell.replaceChildren(pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。"),
-      make("div", { className: "upload-actions" },
-        make("a", { href: "#operations", className: "secondary", text: "操作记录" }),
-        make("a", { href: "#recycle", className: "secondary", text: "回收站" })),
+    const notifyTargets = [
+      ...(me.role === "counselor"
+        ? data.majors.filter(m => m.grade_id === me.grade_id).map(m => ["major:" + m.id, "专业 · " + m.name])
+        : data.majors.map(m => ["major:" + m.id, "专业 · " + m.name])),
+      ...visibleClasses.map(c => ["class:" + c.id, "班级 · " + c.name])
+    ];
+    const notifyForm = make("form", { className: "form-grid" },
+      field("通知标题", "title", "text", true, "重要提醒"),
+      make("label", { className: "field wide" }, make("span", { text: "通知内容" }), make("textarea", { name: "content", required: "", rows: 4, placeholder: "填写通知正文" })),
+      select("收件范围", "target", notifyTargets, notifyTargets[0]?.[0]),
+      make("button", { className: "btn", type: "submit", text: "发送站内通知" }));
+    notifyForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      const release = busy(notifyForm);
+      try {
+        const values = formData(notifyForm);
+        const [kind, raw] = (values.target || "").split(":");
+        const audience = kind === "class" ? { classId: Number(raw) } : kind === "major" ? { majorId: Number(raw) } : {};
+        const result = await post("/api/admin/notifications", { title: values.title, content: values.content, audience });
+        feedback(notifyForm, "已发送给 " + result.count + " 名学生。", "success");
+      } catch (error) { feedback(notifyForm, error.message); }
+      finally { release(); }
+    });
+    const deadlineForm = make("form", { className: "inline-form" },
+      select("材料", "materialId", data.materials.map(x => [x.id, x.name])),
+      field("截止时间", "deadline", "text", true, ""),
+      make("button", { className: "btn", type: "submit", text: "设置截止" }));
+    deadlineForm.querySelector("[name=deadline]").placeholder = "YYYY-MM-DD 或 YYYY-MM-DD HH:MM";
+    deadlineForm.addEventListener("submit", async event => {
+      event.preventDefault();
+      const release = busy(deadlineForm);
+      try {
+        const result = await post("/api/admin/materials/deadline", formData(deadlineForm));
+        feedback(deadlineForm, result.message, "success");
+      } catch (error) { feedback(deadlineForm, error.message); }
+      finally { release(); }
+    });
+    shell.replaceChildren(pageHead(adminCode, adminTitle, "管理学生档案、辅导员与培养进度。", adminGreeting()),
       metrics,
+      panel(make("div", { className: "panel-head" }, make("h2", { text: "发送站内通知" }), make("span", { className: "small", text: "手动向学生发送站内信。" })), notifyForm),
+      panel(make("div", { className: "panel-head" }, make("h2", { text: "材料截止时间" }), make("span", { className: "small", text: "设置后学生端「我的档案」会显示倒计时提示，也可用办公助理设置。" })), deadlineForm),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "检索学生" })), searchForm),
       ...(addStudentForm ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "手动添加学生" }), make("span", { className: "small", text: "单独添加一名学生到班级，初始密码 cauc+学号。" })), addStudentForm)] : []),
       ...(me.role === "admin" ? [
-        ...(addCounselorForm ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "手动添加辅导员" }), make("span", { className: "small", text: "单独添加一名辅导员到专业，初始密码 cauc+用户名。" })), addCounselorForm)] : []),
+        ...(addCounselorForm ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "手动添加辅导员" }), make("span", { className: "small", text: "单独添加一名辅导员到年级，初始密码 cauc+用户名。" })), addCounselorForm)] : []),
         panel(make("div", { className: "panel-head" }, make("h2", { text: "辅导员管理" }), make("span", { className: "small", text: "共 " + data.counselors.length + " 人 · 批量增删请用右下角办公助理" })),
           data.counselors.length ? tableWrap(counselorsTable) : make("div", { className: "empty-state" }, make("strong", { text: "尚无辅导员" }), "可手动添加，或打开办公助理批量添加。"))
       ] : []),
-      panel(make("div", { className: "panel-head" }, make("h2", { text: "班级设置" }), make("span", { className: "small", text: "创建班级并命名，学生提交后可选该班班长" })),
+      panel(make("div", { className: "panel-head" }, make("h2", { text: "班级设置" }), make("span", { className: "small", text: "创建班级并命名，学生提交后可选该班学生管理员" })),
         classForm,
         data.classes.length ? tableWrap(make("table", { className: "data" },
-          make("thead", {}, make("tr", {}, ["班级", "专业", "班长", "操作"].map(x => make("th", { text: x })))),
-          make("tbody", {}, visibleClasses.map(cls => make("tr", {},
-            make("td", { text: cls.name }),
-            make("td", { text: data.majors.find(m => m.id === cls.major_id)?.name || "" }),
-            make("td", { text: data.students.find(s => s.id === cls.monitor_user_id)?.name || "未设置" }),
-            make("td", {}, button("查看学生", () => {
-              history.replaceState(null, "", "?classId=" + cls.id + "#admin");
-              render();
-            }, "secondary"))))))) : null),
+          make("thead", {}, make("tr", {}, ["班级", "专业", "学生管理员", "操作"].map(x => make("th", { text: x })))),
+          make("tbody", {}, visibleClasses.map(cls => {
+            const monitor = data.students.find(s => s.id === cls.monitor_user_id);
+            return make("tr", {},
+              make("td", { text: cls.name }),
+              make("td", { text: data.majors.find(m => m.id === cls.major_id)?.name || "" }),
+              make("td", {}, monitor ? make("span", {}, monitor.name, " ", make("a", { className: "text-link small", text: "取消", onclick: async () => {
+                if (!await actionDialog("取消学生管理员", "取消「" + cls.name + "」的学生管理员 " + monitor.name + "？")) return;
+                try { await post("/api/admin/classes/monitor", { classId: cls.id, studentId: null }); render(); }
+                catch (error) { feedback(shell, error.message); }
+              } })) : "未设置"),
+              make("td", {}, button("查看学生", () => {
+                history.replaceState(null, "", "?classId=" + cls.id + "#admin");
+                render();
+              }, "secondary")));
+          })))) : null),
       ...(me.role === "admin" ? [
-        ...(!needCollege ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "学院与专业设置" })), collegeForm, majorForm)] : [panel(make("div", { className: "panel-head" }, make("h2", { text: "学院与专业设置" })), collegeForm)]),
+        panel(make("div", { className: "panel-head" }, make("h2", { text: "学院、年级与专业设置" })), collegeForm, ...(collegeChoices.length ? [gradeForm] : []), ...(gradeChoices.length ? [majorForm] : [])),
         ...(!needMajor ? [panel(make("div", { className: "panel-head" }, make("h2", { text: "邀请辅导员" })), inviteForm, inviteOutput)] : [])
       ] : []),
       panel(make("div", { className: "panel-head" }, make("h2", { text: "学生档案" }), make("span", { className: "small", text: "共 " + data.students.length + " 人" })),
@@ -1540,15 +1898,16 @@ function adminPage() {
         }, "secondary") : null,
         data.students.length ? bulkTools : null,
         data.students.length ? tableWrap(students) : make("div", { className: "empty-state" }, make("strong", { text: "尚无学生" }), "打开办公助理上传入围名单，或在上方手动添加。")));
-  } catch (error) { shell.replaceChildren(pageHead(adminCode, adminTitle), notice(error.message, "error")); } })();
+    if (pendingScroll !== null) { window.scrollTo(0, pendingScroll); pendingScroll = null; }
+  } catch (error) { shell.replaceChildren(pageHead(adminCode, adminTitle, "", adminGreeting()), notice(error.message, "error")); } })();
   return shell;
 }
 function showStudent(student, data) {
-  const orgLine = [student.college_name, student.major_name, student.class_name].filter(Boolean).join(" · ") || "未分配学院/专业/班级";
+  const orgLine = [student.college_name, student.grade_name, student.major_name, student.class_name].filter(Boolean).join(" · ") || "未分配学院/年级/专业/班级";
   const wrap = make("div", { className: "view view-student-detail" },
     pageHead("STAFF / STUDENT PROFILE", student.name + "的档案", "学号 " + student.student_no + " · " + orgLine),
     button("← 返回工作台", () => navigate("admin"), "secondary"));
-  const classChoices = (me.role === "admin" ? data.classes : data.classes.filter(c => c.major_id === me.major_id)).map(x => [x.id, (data.majors.find(m => m.id === x.major_id)?.name || "") + " · " + x.name]);
+  const classChoices = (me.role === "admin" ? data.classes : data.classes.filter(c => (data.majors.find(m => m.id === c.major_id)?.grade_id) === me.grade_id)).map(x => [x.id, (data.majors.find(m => m.id === x.major_id)?.name || "") + " · " + x.name]);
   const profileForm = make("form", { className: "form-grid" },
     select("班级", "classId", classChoices, student.class_id),
     field("年级", "grade", "text", false, student.grade || ""),
@@ -1605,7 +1964,7 @@ function showStudent(student, data) {
         make("td", { text: file.stage_name }), make("td", { text: file.material_name }),
         make("td", {}, make("a", { href: "/api/checks/" + file.id + "/file", text: file.filename })),
         make("td", { text: file.review_status || "待审阅" }),
-        make("td", { text: file.checked_at })))));
+        make("td", { text: displayTime(file.checked_at) })))));
     filesPanel.replaceChildren(make("div", { className: "panel-head" }, make("h2", { text: "已提交文件" }), make("span", { className: "small", text: result.files.length + " 份" })),
       result.files.length ? tableWrap(table) : make("div", { className: "empty-state" }, "这名学生尚未提交文件。"));
   } catch (error) { filesPanel.replaceChildren(notice(error.message, "error")); } })();
@@ -1618,6 +1977,7 @@ async function init() {
     if (config.initialized && location.hash === "#bootstrap") {
       history.replaceState(null, "", "#login");
     }
+    await refreshUnreadNotifications();
     render();
     const fab = document.getElementById("mentorFab");
     if (fab) fab.addEventListener("click", () => mentorPanelOpen ? closeMentor() : openMentor());

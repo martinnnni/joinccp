@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import worker, { checkRoutes, officeRoutes } from "../worker.js";
 
-const counselor = { id: 8, role: "counselor", major_id: 2 };
+const counselor = { id: 8, role: "counselor", grade_id: 2 };
 const admin = { id: 1, role: "admin" };
 const migrations = new URL("../migrations/", import.meta.url);
 
@@ -46,11 +46,12 @@ function setup(t) {
   };
   db.exec(`
     INSERT INTO departments(id,name) VALUES(2,'甲院'),(3,'乙院');
-    INSERT INTO majors(id,college_id,name) VALUES(2,2,'甲专业'),(3,3,'乙专业');
+    INSERT INTO grades(id,college_id,name) VALUES(2,2,'甲年级'),(3,3,'乙年级');
+    INSERT INTO majors(id,college_id,grade_id,name) VALUES(2,2,2,'甲专业'),(3,3,3,'乙专业');
     INSERT INTO classes(id,major_id,name) VALUES(2,2,'甲一班'),(3,3,'乙一班');
-    INSERT INTO users(id,username,password_salt,password_verifier,role,department_id,major_id,class_id) VALUES
-      (1,'admin-test','','','admin',NULL,NULL,NULL),(8,'staff-test','','','counselor',2,2,NULL),
-      (11,'100011','','','student',2,NULL,2),(12,'100012','','','student',2,NULL,2),(13,'100013','','','student',3,NULL,3);
+    INSERT INTO users(id,username,password_salt,password_verifier,role,department_id,major_id,class_id,grade_id) VALUES
+      (1,'admin-test','','','admin',NULL,NULL,NULL,NULL),(8,'staff-test','','','counselor',2,NULL,NULL,2),
+      (11,'100011','','','student',2,NULL,2,NULL),(12,'100012','','','student',2,NULL,2,NULL),(13,'100013','','','student',3,NULL,3,NULL);
     INSERT INTO profiles(user_id,name,student_no,grade) VALUES
       (11,'测试甲','100011','2026'),(12,'测试乙','100012','2026'),(13,'测试丙','100013','2026');
   `);
@@ -70,7 +71,7 @@ function setup(t) {
       desired = action;
       return (await call("plan", { question: "处理测试任务" }, user)).json();
     },
-    execute: (plan, user) => call("execute", { planId: plan.id }, user)
+    execute: (plan, user) => call("execute", { planId: plan.id, jitToken: plan.jitToken }, user)
   };
 }
 
@@ -90,6 +91,21 @@ test("站内信预览确定收件人，确认只发送一次，执行前复核�
   assert.equal((await (await execute(first)).json()).count, 2);
   await assert.rejects(execute(first), { status: 409 });
   assert.deepEqual(db.prepare("SELECT student_id FROM notifications ORDER BY id").all().map(row => row.student_id), [11, 12]);
+});
+
+test("办公 JIT 授权绑定操作者、操作内容和到期计划", async t => {
+  const { db, plan, call } = setup(t);
+  const grant = (await plan({ type: "send_notifications", students: [{ student: "100011" }], title: "提醒", content: "请查看材料。" })).plan;
+  assert.match(grant.jitToken, /^[a-f0-9]{64}$/);
+  await assert.rejects(call("execute", { planId: grant.id }), { status: 403 });
+  await assert.rejects(call("execute", { planId: grant.id, jitToken: "0".repeat(64) }), { status: 403 });
+  const original = db.prepare("SELECT payload_json FROM office_plans WHERE id=?").get(grant.id).payload_json;
+  db.prepare("UPDATE office_plans SET payload_json=? WHERE id=?").run(JSON.stringify({ ...JSON.parse(original), content: "已被改写" }), grant.id);
+  await assert.rejects(call("execute", { planId: grant.id, jitToken: grant.jitToken }), { status: 403 });
+  assert.equal(db.prepare("SELECT count(*) AS n FROM notifications").get().n, 0);
+  db.prepare("UPDATE office_plans SET payload_json=? WHERE id=?").run(original, grant.id);
+  assert.equal((await (await call("execute", { planId: grant.id, jitToken: grant.jitToken })).json()).count, 1);
+  await assert.rejects(call("execute", { planId: grant.id, jitToken: grant.jitToken }), { status: 409 });
 });
 
 test("回收站保留材料，跨院系名单整批拒绝", async t => {
@@ -120,13 +136,16 @@ test("管理员新增学院和生成邀请码，辅导员仅能查询本专业�
   const college = (await plan({ type: "create_department", name: "新学院" }, admin)).plan;
   await execute(college, admin);
   const { id: collegeId } = db.prepare("SELECT id FROM departments WHERE name='新学院'").get();
-  const major = (await plan({ type: "create_major", collegeId, name: "新专业" }, admin)).plan;
+  const grade = (await plan({ type: "create_grade", collegeId, name: "新年级" }, admin)).plan;
+  await execute(grade, admin);
+  const { id: gradeId } = db.prepare("SELECT id FROM grades WHERE name='新年级'").get();
+  const major = (await plan({ type: "create_major", gradeId, name: "新专业" }, admin)).plan;
   await execute(major, admin);
   const { id: majorId } = db.prepare("SELECT id FROM majors WHERE name='新专业'").get();
-  const invites = (await plan({ type: "create_invites", majorId, count: 2 }, admin)).plan;
+  const invites = (await plan({ type: "create_invites", gradeId, count: 2 }, admin)).plan;
   const output = await (await execute(invites, admin)).json();
   assert.equal(output.count, 2);
-  assert.equal(db.prepare("SELECT count(*) AS n FROM invites WHERE major_id=? AND role='counselor'").get(majorId).n, 2);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM invites WHERE grade_id=? AND role='counselor'").get(gradeId).n, 2);
 });
 
 test("对话确认后推进培养阶段、审阅最新材料并通知学生", async t => {
@@ -168,7 +187,7 @@ test("批量名单逐行标记重复、缺项和已存在账号，校验通过�
   const accepted = await (await call("roster-preview", { classId: 2, rows })).json();
   assert.equal(accepted.plan.type, "register_students");
   assert.equal(db.prepare("SELECT count(*) AS n FROM profiles WHERE student_no='100015'").get().n, 0);
-  assert.equal((await (await call("execute", { planId: accepted.plan.id })).json()).count, 1);
+  assert.equal((await (await call("execute", { planId: accepted.plan.id, jitToken: accepted.plan.jitToken })).json()).count, 1);
   assert.equal(db.prepare("SELECT must_change_password FROM users WHERE username='100015'").get().must_change_password, 1);
 });
 
@@ -193,14 +212,13 @@ test("材料断线重试只写入一次，并保留上一版本", async t => {
   assert.deepEqual(deleted, []);
 });
 
-test("无权限的请求也留下记录，查询参数不写入", async t => {
+test("无权限的请求不留下记录", async t => {
   const { db, env } = setup(t);
   const jobs = [];
   const result = await worker.fetch(new Request("https://example.test/api/admin/recycle?value=secret"), env, { waitUntil: job => jobs.push(job) });
   assert.equal(result.status, 401);
   await Promise.all(jobs);
-  const row = db.prepare("SELECT action,method,status,actor_id FROM operation_logs").get();
-  assert.deepEqual({ ...row }, { action: "/api/admin/recycle", method: "GET", status: 401, actor_id: null });
+  assert.equal(db.prepare("SELECT count(*) AS n FROM operation_logs").get().n, 0);
 });
 
 test("辅导员只能恢复自己专业的学生，恢复结果与访问审计可查询", async t => {
@@ -226,5 +244,4 @@ test("辅导员只能恢复自己专业的学生，恢复结果与访问审计�
   assert.equal(db.prepare("SELECT deleted_at FROM users WHERE id=11").get().deleted_at, null);
   const logs = await (await call("operation-logs")).json();
   assert.ok(logs.logs.some(row => row.action === "restore_account" && row.targets === "11"));
-  assert.ok(logs.logs.some(row => row.action === "/api/admin/recycle/restore" && row.status === 404));
 });

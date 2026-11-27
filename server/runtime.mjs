@@ -130,9 +130,13 @@ class StaticAssets {
     catch { return new Response("Not found", { status: 404 }); }
     try {
       const contents = await readFile(target);
+      const ext = extname(target).toLowerCase();
+      const cacheControl = relative === "index.html" ? "no-cache"
+        : [".js", ".css", ".mjs", ".map"].includes(ext) ? "no-cache"
+          : "public, max-age=86400";
       return new Response(contents, { headers: {
-        "content-type": mimeTypes[extname(target).toLowerCase()] || "application/octet-stream",
-        "cache-control": relative === "index.html" ? "no-cache" : "public, max-age=3600"
+        "content-type": mimeTypes[ext] || "application/octet-stream",
+        "cache-control": cacheControl
       } });
     } catch (error) {
       if (error?.code === "ENOENT" || error?.code === "EISDIR") return new Response("Not found", { status: 404 });
@@ -149,6 +153,7 @@ export function applyMigrations(database, migrationsDirectory = join(root, "migr
   )`);
   const applied = new Set(database.prepare("SELECT name FROM d1_migrations").all().map(row => row.name));
   const migrations = readdirSync(migrationsDirectory).filter(name => /^\d+.*\.sql$/.test(name)).sort();
+  database.exec("PRAGMA foreign_keys=OFF");
   for (const name of migrations) {
     if (applied.has(name)) continue;
     const sql = readFileSync(join(migrationsDirectory, name), "utf8");
@@ -162,6 +167,7 @@ export function applyMigrations(database, migrationsDirectory = join(root, "migr
       throw new Error(`迁移 ${name} 失败`, { cause: error });
     }
   }
+  database.exec("PRAGMA foreign_keys=ON");
 }
 
 export function createRuntime() {

@@ -398,10 +398,17 @@ export async function processImage(canvas, corners) {
     name, color: await canvasToBlob(color, .94),
     async enhance(mode) {
       const gray = grayscale(region);
-      const flat = illuminationFlatten(gray, w, h, Math.max(8, Math.round(Math.min(w, h) / 12)));
-      const pixels = mode === "bw" ? bradleyThreshold(flat, w, h, oddClamp(Math.round(Math.min(w, h) / 16), 15, 255), .15)
-        : autoContrast(flat, w, h);
-      return canvasToBlob(grayToCanvas(pixels, w, h));
+      // 先三次盒式模糊近似高斯去噪（抑制手机照片的 ISO 噪点与 JPEG 颗粒），再二值化/增强，
+      // 否则噪点会在阈值附近翻转成满屏麻点（线上『黑白乱码』的病根）。
+      const smooth = boxBlur(boxBlur(boxBlur(gray, w, h, 1), w, h, 1), w, h, 1);
+      if (mode === "bw") {
+        // 局部均值减 C 的自适应阈值（OpenCV 文档扫描配方），窗口取短边 1/8，抗光照渐变
+        const block = oddClamp(Math.round(Math.min(w, h) / 8), 51, 301);
+        return canvasToBlob(grayToCanvas(adaptiveThreshold(smooth, w, h, block, 13), w, h));
+      }
+      // 灰度增强：大半径光照展平去掉阴影与明暗不均，再温和拉伸对比度
+      const flat = illuminationFlatten(smooth, w, h, Math.max(16, Math.round(Math.min(w, h) / 6)));
+      return canvasToBlob(grayToCanvas(autoContrast(flat, w, h, .005), w, h));
     }
   };
 }

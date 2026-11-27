@@ -7,7 +7,7 @@ import { officeRoutes } from "../worker.js";
 const request = (path, data) => new Request("https://example.test" + path, {
   method: "POST", headers: { origin: "https://example.test", "content-type": "application/json" }, body: JSON.stringify(data)
 });
-const counselor = { id: 8, role: "counselor", major_id: 2 };
+const counselor = { id: 8, role: "counselor", grade_id: 2 };
 
 test("办公助理使用独立人格和仅规划不执行的提示词", () => {
   const messages = officeMessages("为张三重置密码", "", [], "counselor", { stages: [], materials: [] });
@@ -17,7 +17,7 @@ test("办公助理使用独立人格和仅规划不执行的提示词", () => {
 });
 
 test("管理员的对话计划保留辅导员名单和指定专业", () => {
-  const action = { type: "register_counselors", majorId: 2, counselors: [{ name: "张三", username: "teacher1" }] };
+  const action = { type: "register_counselors", gradeId: 2, counselors: [{ name: "张三", username: "teacher1" }] };
   assert.deepEqual(parseOfficePlan(JSON.stringify({ reply: "请核对名单", action })).action, action);
   assert.match(officeMessages("", "", [], "admin", {})[0].content, /delete_counselors/);
   assert.doesNotMatch(officeMessages("", "", [], "counselor", {})[0].content, /delete_counselors/);
@@ -72,7 +72,7 @@ test("办公助理仅生成待确认计划，不在规划阶段重置密码", as
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"reply":"请核对目标学生","action":{"type":"reset_password","student":"123456789"}}' } }] }), { status: 200 });
   const writes = [];
-  const env = { DEEPSEEK_API_KEY: "test", DB: { prepare(sql) { return {
+  const env = { DEEPSEEK_API_KEY: "test", AUTH_PEPPER: "p".repeat(40), DB: { prepare(sql) { return {
     sql, params: [], bind(...params) { this.params = params; return this; },
     async all() {
       if (sql.includes("FROM users u JOIN profiles p")) return { results: [{ id: 7, name: "张三", student_no: "123456789", department_id: 2 }] };
@@ -116,7 +116,7 @@ test("已确认的密码重置只保存校验值并注销该学生会话", async
       async first() {
         if (sql.includes("FROM office_plans")) return { id: planId, user_id: 8, status: "pending", expires_at: "2999-01-01T00:00:00.000Z", payload_json: JSON.stringify({ type: "reset_password", studentId: 7, studentNo: "123456789" }) };
         if (sql.includes("FROM users u JOIN profiles p")) return { id: 7, class_id: 2, major_id: 2, student_no: "123456789" };
-        if (sql.includes("FROM users u LEFT JOIN classes")) return { major_id: 2 };
+        if (sql.includes("FROM users u LEFT JOIN classes")) return { grade_id: 2 };
         return null;
       },
       async run() { operations.push(this); return { meta: { changes: 1 } }; }
