@@ -236,7 +236,7 @@ async function studentRoutes(request, env, path, user) {
     const stage = await env.DB.prepare("SELECT * FROM stages WHERE slug=?").bind(user.current_stage_slug).first();
     const node = await env.DB.prepare("SELECT * FROM nodes WHERE slug=?").bind(user.current_node_slug).first();
     const next = node ? await env.DB.prepare("SELECT * FROM nodes WHERE stage_slug=? AND position>? ORDER BY position LIMIT 1").bind(node.stage_slug, node.position).first() : null;
-    const materials = await env.DB.prepare("SELECT m.*,r.status,r.id AS record_id,r.r2_key,c.review_status,c.review_note,c.monitor_approved,c.checked_at,c.monitor_approved_at,c.reviewed_at FROM materials m LEFT JOIN material_records r ON r.material_id=m.id AND r.student_id=? LEFT JOIN checks c ON c.id=(SELECT id FROM checks WHERE student_id=r.student_id AND material_id=m.id ORDER BY id DESC LIMIT 1) WHERE m.stage_slug=? ORDER BY m.id").bind(user.id, user.current_stage_slug).all();
+    const materials = await env.DB.prepare("SELECT m.*,r.status,r.id AS record_id,r.r2_key,c.id AS check_id,c.review_status,c.review_note,c.monitor_approved,c.checked_at,c.monitor_approved_at,c.reviewed_at,c.viewed_at FROM materials m LEFT JOIN material_records r ON r.material_id=m.id AND r.student_id=? LEFT JOIN checks c ON c.id=(SELECT id FROM checks WHERE student_id=r.student_id AND material_id=m.id ORDER BY id DESC LIMIT 1) WHERE m.stage_slug=? ORDER BY m.id").bind(user.id, user.current_stage_slug).all();
     const history = await env.DB.prepare("SELECT id,material_id,filename,checked_at,monitor_approved_at,reviewed_at,review_status,review_note FROM checks WHERE student_id=? AND material_id IN (SELECT id FROM materials WHERE stage_slug=?) ORDER BY id DESC LIMIT 150").bind(user.id, user.current_stage_slug).all();
     return json({ ok: true, profile: user, college: user.college_name || "", major: user.major_name || "", className: user.class_name || "", stage, node, next, materials: materials.results, submissionHistory: history.results });
   }
@@ -545,7 +545,7 @@ export async function checkRoutes(request, env, path, user, audit = {}) {
       values.push(new Date(since).toISOString());
     }
     if (params.get("before")) { conditions.push("c.id<?"); values.push(id(params.get("before"))); }
-    const query = "SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,c.monitor_approved,m.name AS material_name,p.name AS student_name,u.class_id,cl.name AS class_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id JOIN users u ON u.id=c.student_id LEFT JOIN classes cl ON cl.id=u.class_id WHERE ";
+    const query = "SELECT c.id,c.student_id,c.material_id,c.filename,c.checked_at,c.review_status,c.review_note,c.monitor_approved,c.viewed_at,m.name AS material_name,p.name AS student_name,u.class_id,cl.name AS class_name FROM checks c JOIN materials m ON m.id=c.material_id JOIN profiles p ON p.user_id=c.student_id JOIN users u ON u.id=c.student_id LEFT JOIN classes cl ON cl.id=u.class_id WHERE ";
     const { results } = await env.DB.prepare(query + conditions.join(" AND ") + " ORDER BY c.id DESC LIMIT 51").bind(...values).all();
     const classes = user.role === "student" ? { results: [] } : allClasses
       ? await env.DB.prepare("SELECT id,name FROM classes ORDER BY name").all()
@@ -566,18 +566,42 @@ export async function checkRoutes(request, env, path, user, audit = {}) {
     await env.DB.batch(rows.results.map(row => env.DB.prepare("UPDATE checks SET monitor_approved=1,monitor_approved_at=? WHERE id=?").bind(iso(), row.id)));
     return json({ ok: true, count: rows.results.length });
   }
-  const match = /^\/api\/checks\/(\d+)\/(file|results)$/.exec(path);
+  const match = /^\/api\/checks\/(\d+)\/(file|results|withdraw)$/.exec(path);
   if (match && request.method === "GET") {
     const row = await env.DB.prepare("SELECT * FROM checks WHERE id=?").bind(id(match[1])).first();
     assert(row, "质检记录不存在", 404);
     assert(await canReadStudent(env, user, row.student_id), "无权访问此材料", 403);
     if (match[2] === "results") {
+      if (user.role !== "student" || user.id !== row.student_id) {
+        await env.DB.prepare("UPDATE checks SET viewed_at=COALESCE(viewed_at,?),viewed_by=COALESCE(viewed_by,?) WHERE id=?").bind(iso(), user.id, row.id).run();
+      }
       const results = await env.DB.prepare("SELECT kind,code,message,severity,suggestion FROM check_results WHERE check_id=? ORDER BY id").bind(row.id).all();
       return json({ ok: true, results: results.results });
+    }
+    if (match[2] === "file") {
+      if (user.role !== "student" || user.id !== row.student_id) {
+        await env.DB.prepare("UPDATE checks SET viewed_at=COALESCE(viewed_at,?),viewed_by=COALESCE(viewed_by,?) WHERE id=?").bind(iso(), user.id, row.id).run();
+      }
     }
     const object = await env.FILES.get(row.r2_key);
     assert(object, "文件不存在", 404);
     return fileResponse(object, row.filename, uploadType(row.filename, true)?.mime || "application/octet-stream");
+  }
+  if (match && request.method === "POST" && match[2] === "withdraw") {
+    assert(user.role === "student", "仅学生可撤销提交", 403);
+    const row = await env.DB.prepare("SELECT c.*,m.name AS material_name FROM checks c JOIN materials m ON m.id=c.material_id WHERE c.id=?").bind(id(match[1])).first();
+    assert(row && row.student_id === user.id, "提交记录不存在", 404);
+    assert(row.review_status === "待审阅", "材料已开始审阅，无法撤销", 409);
+    assert(!row.viewed_at, "辅导员或学生管理员已查看该材料，无法撤销", 409);
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM check_results WHERE check_id=?").bind(row.id),
+      env.DB.prepare("DELETE FROM checks WHERE id=?").bind(row.id),
+      env.DB.prepare("UPDATE material_records SET status='未交',r2_key=NULL,filename=NULL,submitted_at=NULL WHERE student_id=? AND material_id=?").bind(user.id, row.material_id)
+    ]);
+    await env.FILES.delete(row.r2_key).catch(() => {});
+    audit.action = "withdraw_check";
+    audit.targets = row.material_name;
+    return json({ ok: true, message: "已撤销「" + row.material_name + "」的提交，可重新提交。" });
   }
   return null;
 }
